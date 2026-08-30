@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="kali-dark"] {
+  --bg-page: #0a0b0d;
+  --bg-card: #111215;
+  --bg-subcard: #0a0b0d;
+  --bg-input: #151619;
+  --bg-hover: #1c1d22;
+  --border: #1a1b1f;
+  --border-active: #2a2b2f;
+  --border-focus: #00f0ff;
+  --accent: #00f0ff;
+  --accent-rgb: 0, 240, 255;
+  --accent-dim: rgba(0, 240, 255, 0.15);
+  --accent-glow: 0 0 15px rgba(0, 240, 255, 0.35);
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --text-muted: #606060;
+  --slider-track: #1a1b1f;
+}
+
+[data-theme="terminal-green"] {
+  --bg-page: #050b06;
+  --bg-card: #09140b;
+  --bg-subcard: #050b06;
+  --bg-input: #0e1e10;
+  --bg-hover: #132b17;
+  --border: #15301b;
+  --border-active: #1e4727;
+  --border-focus: #00ff66;
+  --accent: #00ff66;
+  --accent-rgb: 0, 255, 102;
+  --accent-dim: rgba(0, 255, 102, 0.15);
+  --accent-glow: 0 0 15px rgba(0, 255, 102, 0.35);
+  --text-primary: #e2fce5;
+  --text-secondary: #86efac;
+  --text-muted: #3d7047;
+  --slider-track: #15301b;
+}
+
+[data-theme="kali-blue"] {
+  --bg-page: #060a14;
+  --bg-card: #0b1224;
+  --bg-subcard: #060a14;
+  --bg-input: #101b36;
+  --bg-hover: #17274d;
+  --border: #172a52;
+  --border-active: #223e78;
+  --border-focus: #388bfd;
+  --accent: #388bfd;
+  --accent-rgb: 56, 139, 253;
+  --accent-dim: rgba(56, 139, 253, 0.15);
+  --accent-glow: 0 0 15px rgba(56, 139, 253, 0.35);
+  --text-primary: #e1ecfd;
+  --text-secondary: #93c5fd;
+  --text-muted: #47669c;
+  --slider-track: #172a52;
+}
+
+[data-theme="white-terminal"] {
+  --bg-page: #f3f4f6;
+  --bg-card: #ffffff;
+  --bg-subcard: #f9fafb;
+  --bg-input: #f3f4f6;
+  --bg-hover: #e5e7eb;
+  --border: #e5e7eb;
+  --border-active: #d1d5db;
+  --border-focus: #0088aa;
+  --accent: #0088aa;
+  --accent-rgb: 0, 136, 170;
+  --accent-dim: rgba(0, 136, 170, 0.15);
+  --accent-glow: 0 0 10px rgba(0, 136, 170, 0.25);
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --slider-track: #e5e7eb;
+}
+
+/* Custom transitions and helper classes */
+body {
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  background-color: var(--accent) !important;
+}
+
+input[type="range"]::-moz-range-thumb {
+  background-color: var(--accent) !important;
+}

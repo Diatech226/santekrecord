@@ -1,0 +1,6 @@
+{
+  "name": "Auto Voice Recorder",
+  "description": "Minimalist automated voice-activated audio recorder for Kali Linux with RMS and Silero VAD detection, supporting Microphone, USB audio, and HackRF GNU Radio streams.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
