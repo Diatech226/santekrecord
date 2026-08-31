@@ -22,11 +22,16 @@ export const SourceSelector: React.FC<Props> = ({
 }) => {
   const { t } = useLanguage();
 
-  const filteredDevices = devices.filter((d) => {
-    if (source === 'microphone') return d.type === 'microphone' || d.type === 'other';
-    if (source === 'usb') return d.type === 'usb' || d.type === 'line' || d.type === 'other';
-    return true;
-  });
+  const filteredDevices = devices.length > 0 ? devices : [
+    {
+      id: 'default-mic',
+      name: t.defaultAudioDevice || 'Default System Microphone',
+      max_input_channels: 1,
+      default_samplerate: 16000,
+      is_default: true,
+      type: 'microphone' as const,
+    },
+  ];
 
   return (
     <div id="source-selector-block" className="space-y-4 font-mono">

@@ -1,8 +1,7 @@
 import React from 'react';
 import { AppSettings, DetectionMode } from '../types';
-import { Sliders, Palette, Check, Scissors } from 'lucide-react';
+import { Sliders, Scissors } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { useTheme } from '../theme/ThemeContext';
 
 interface Props {
   settings: AppSettings;
@@ -18,7 +17,6 @@ export const SettingsPanel: React.FC<Props> = ({
   onOpenCalibration,
 }) => {
   const { t } = useLanguage();
-  const { theme, setTheme, themeOptions, currentThemeOption } = useTheme();
 
   const isAutoTrimEnabled = settings.auto_trim_silence !== false;
   const trimMargin = settings.trim_margin_seconds ?? 0.2;
@@ -111,7 +109,7 @@ export const SettingsPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Grid: Pre-buffer & Stop after silence */}
+        {/* Pre-record & Stop after silence Grid */}
         <div className="grid grid-cols-2 gap-3">
           {/* Pre-record */}
           <div className="space-y-1.5">
@@ -157,6 +155,53 @@ export const SettingsPanel: React.FC<Props> = ({
               <span>0.5s</span>
               <span>10.0s</span>
             </div>
+          </div>
+        </div>
+
+        {/* Sound Card Input Gain & Channel Routing */}
+        <div className="p-2.5 rounded bg-[#111215] border border-[#1F2228] space-y-3">
+          {/* Software Gain Boost */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-[10px]">
+              <span className="text-[#E0E0E0] uppercase tracking-wider font-semibold">{t.inputGain}</span>
+              <span className="text-[#00F0FF] font-mono font-bold">
+                {(settings.input_gain ?? 1.0).toFixed(1)}x ({Math.round(20 * Math.log10(settings.input_gain ?? 1.0))} dB)
+              </span>
+            </div>
+            <input
+              id="input-gain-slider"
+              type="range"
+              min="1.0"
+              max="8.0"
+              step="0.5"
+              disabled={disabled}
+              value={settings.input_gain ?? 1.0}
+              onChange={(e) => onUpdateSettings({ input_gain: Number(e.target.value) })}
+              className="w-full accent-[#00F0FF] h-1.5 bg-[#1A1B1F] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+            />
+            <div className="flex justify-between text-[9px] text-[#606060] font-mono">
+              <span>1.0x (Standard)</span>
+              <span>8.0x (+18 dB Boost)</span>
+            </div>
+            <p className="text-[9px] text-[#707070]">{t.inputGainDesc}</p>
+          </div>
+
+          {/* Input Channel Routing */}
+          <div className="space-y-1.5 pt-2 border-t border-[#1A1B1F]">
+            <label htmlFor="input-channel-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">
+              {t.inputChannel}
+            </label>
+            <select
+              id="input-channel-select"
+              disabled={disabled}
+              value={settings.input_channel ?? 'auto'}
+              onChange={(e) => onUpdateSettings({ input_channel: e.target.value as 'auto' | 'channel_1' | 'channel_2' })}
+              className="w-full text-xs bg-[#151619] border border-[#2A2B2F] text-[#E0E0E0] rounded p-2 focus:outline-none focus:border-[#00F0FF] cursor-pointer disabled:opacity-50"
+            >
+              <option value="auto">{t.channelAuto}</option>
+              <option value="channel_1">{t.channel1}</option>
+              <option value="channel_2">{t.channel2}</option>
+            </select>
           </div>
         </div>
       </div>
@@ -225,92 +270,6 @@ export const SettingsPanel: React.FC<Props> = ({
               </div>
             </div>
           )}
-        </div>
-      </div>
-
-      {/* 3. Kali-Inspired Theme Settings Section */}
-      <div id="theme-settings-section" className="space-y-3 pt-2 border-t border-[#1A1B1F]">
-        <div className="flex items-center justify-between pb-1 text-xs">
-          <span className="text-[10px] font-bold text-[#606060] uppercase tracking-widest flex items-center gap-1.5">
-            <Palette className="w-3 h-3 text-[#606060]" />
-            {t.colorScheme}
-          </span>
-          <span
-            className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase font-bold tracking-wider"
-            style={{
-              backgroundColor: `${currentThemeOption.primaryColor}1A`,
-              borderColor: currentThemeOption.primaryColor,
-              color: currentThemeOption.primaryColor,
-              borderWidth: '1px',
-            }}
-          >
-            {currentThemeOption.tag}
-          </span>
-        </div>
-
-        {/* Theme Selectors Grid */}
-        <div className="grid grid-cols-2 gap-2">
-          {themeOptions.map((opt) => {
-            const isSelected = theme === opt.id;
-            const themeName = (t as unknown as Record<string, string>)[opt.nameKey] || opt.defaultName;
-
-            return (
-              <button
-                key={opt.id}
-                id={`theme-option-${opt.id}`}
-                type="button"
-                onClick={() => setTheme(opt.id)}
-                className={`p-2 rounded border text-left flex flex-col justify-between gap-1.5 transition-all duration-150 relative overflow-hidden group ${
-                  isSelected
-                    ? 'bg-[#151619] shadow-sm'
-                    : 'bg-[#0E0F12] hover:bg-[#151619] opacity-80 hover:opacity-100'
-                }`}
-                style={{
-                  borderColor: isSelected ? opt.primaryColor : '#22252C',
-                  boxShadow: isSelected ? `0 0 10px ${opt.primaryColor}30` : undefined,
-                }}
-              >
-                {/* Top preview row */}
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-1.5">
-                    {/* Visual Color Swatch */}
-                    <div
-                      className="w-3 h-3 rounded-full flex items-center justify-center border shadow-sm"
-                      style={{
-                        backgroundColor: opt.primaryColor,
-                        borderColor: '#FFFFFF40',
-                      }}
-                    />
-                    <span
-                      className="text-[9px] font-mono font-bold tracking-wider uppercase truncate"
-                      style={{
-                        color: isSelected ? opt.primaryColor : '#A0A0A0',
-                      }}
-                    >
-                      {opt.tag}
-                    </span>
-                  </div>
-
-                  {isSelected && (
-                    <Check
-                      className="w-3 h-3 shrink-0"
-                      style={{ color: opt.primaryColor }}
-                    />
-                  )}
-                </div>
-
-                {/* Theme Title */}
-                <div
-                  className="text-[10px] font-mono leading-tight truncate"
-                  style={{
-                    color: isSelected ? '#FFFFFF' : '#888888',
-                  }}
-                >
-                  {themeName}
-                </div>
-              </button>
-            );
-          })}
         </div>
       </div>
     </div>

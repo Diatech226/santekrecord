@@ -245,7 +245,9 @@ export class AudioProcessorEngine {
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private analyserNode: AnalyserNode | null = null;
   private scriptNode: ScriptProcessorNode | null = null;
+  private gainNode: GainNode | null = null;
   private isRunning: boolean = false;
   private settings: AppSettings;
   
@@ -264,6 +266,9 @@ export class AudioProcessorEngine {
   
   // Smoothing: 2 positive out of last 3
   private recentDetections: boolean[] = [false, false, false];
+
+  // Ambient Noise Tracking
+  private ambientNoiseFloor: number = -60;
 
   // Callbacks
   private onUpdateCallback?: (update: MonitorUpdate) => void;
@@ -304,41 +309,73 @@ export class AudioProcessorEngine {
 
     try {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioCtx({ sampleRate: this.sampleRate });
+      
+      // Initialize AudioContext with graceful fallback if 16kHz constraint is rejected by OS
+      try {
+        this.audioContext = new AudioCtx({ sampleRate: 16000 });
+      } catch {
+        this.audioContext = new AudioCtx();
+      }
 
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
 
-      let constraints: MediaStreamConstraints = {
-        audio: {
-          channelCount: 1,
-          sampleRate: this.sampleRate,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      };
-
-      if (this.settings.source === 'microphone' || this.settings.source === 'usb') {
-        if (this.settings.device_id && this.settings.device_id !== 'default-mic' && this.settings.device_id !== 'usb-soundcard') {
-          constraints = {
-            audio: {
-              deviceId: { exact: String(this.settings.device_id) },
-              channelCount: 1,
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-            },
-          };
-        }
-      }
+      this.sampleRate = this.audioContext.sampleRate || 16000;
+      this.updatePreBufferCapacity();
 
       if (this.settings.source === 'gnuradio') {
         // Synthesizer simulation for SDR / GNU Radio /tmp/hackrf_audio.f32
         this.setupGnuRadioSimulation();
       } else {
-        this.mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+        let stream: MediaStream | null = null;
+        const devId = this.settings.device_id;
+        const isCustomDevice = devId && devId !== 'default-mic' && devId !== 'usb-soundcard' && devId !== 'gnuradio-fifo';
+
+        // Attempt 1: Target specific sound card / USB device with multi-channel support
+        if (isCustomDevice) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                deviceId: { exact: String(devId) },
+                channelCount: { ideal: 2 },
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+              },
+            });
+          } catch {
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                  deviceId: { ideal: String(devId) },
+                  channelCount: { ideal: 2 },
+                },
+              });
+            } catch (e) {
+              console.warn('Preferred audio device request failed, falling back to default mic:', e);
+            }
+          }
+        }
+
+        // Attempt 2: Default mic without processing
+        if (!stream) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                channelCount: { ideal: 2 },
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+              },
+            });
+          } catch {
+            // Attempt 3: Standard generic audio constraints
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          }
+        }
+
+        this.mediaStream = stream;
         this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
         this.setupAudioProcessing();
       }
@@ -349,9 +386,9 @@ export class AudioProcessorEngine {
       const msg = err instanceof Error ? err.message : 'Audio device initialization failed';
       if (this.onErrorCallback) {
         if (msg.includes('Permission') || msg.includes('NotAllowedError')) {
-          this.onErrorCallback('Microphone permission denied');
+          this.onErrorCallback('Microphone permission denied. Please allow microphone access in your browser.');
         } else if (msg.includes('NotFound') || msg.includes('Overconstrained')) {
-          this.onErrorCallback('Selected audio device disconnected or unavailable');
+          this.onErrorCallback('Selected audio card is disconnected or busy. Try selecting Default Microphone.');
         } else {
           this.onErrorCallback(msg);
         }
@@ -363,18 +400,70 @@ export class AudioProcessorEngine {
   private setupAudioProcessing() {
     if (!this.audioContext || !this.sourceNode) return;
 
+    // High-Resolution FFT AnalyserNode for Real-Time Frequency Spectrum & Interference Diagnostics
+    try {
+      this.analyserNode = this.audioContext.createAnalyser();
+      this.analyserNode.fftSize = 2048;
+      this.analyserNode.smoothingTimeConstant = 0.55;
+      this.sourceNode.connect(this.analyserNode);
+    } catch (e) {
+      console.warn('AnalyserNode creation failed:', e);
+    }
+
     // 2048 samples per chunk @ 16kHz is ~128ms
+    // Set up with 2 input channels to capture multi-channel sound cards & USB audio interfaces
     const bufferSize = 2048;
-    this.scriptNode = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+    this.scriptNode = this.audioContext.createScriptProcessor(bufferSize, 2, 1);
 
     this.scriptNode.onaudioprocess = (e) => {
       if (!this.isRunning) return;
-      const inputBuffer = e.inputBuffer.getChannelData(0);
-      this.processAudioChunk(new Float32Array(inputBuffer));
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+
+      const numChannels = e.inputBuffer.numberOfChannels;
+      const ch0 = e.inputBuffer.getChannelData(0);
+      const gainMultiplier = this.settings.input_gain ?? 1.0;
+      const channelPref = this.settings.input_channel ?? 'auto';
+
+      let chunk = new Float32Array(ch0.length);
+
+      if (numChannels >= 2 && channelPref === 'channel_2') {
+        const ch1 = e.inputBuffer.getChannelData(1);
+        for (let i = 0; i < ch0.length; i++) {
+          chunk[i] = ch1[i] * gainMultiplier;
+        }
+      } else if (channelPref === 'channel_1' || numChannels === 1) {
+        for (let i = 0; i < ch0.length; i++) {
+          chunk[i] = ch0[i] * gainMultiplier;
+        }
+      } else {
+        // Auto: Take whichever channel has active energy or blend to prevent silent channel dropouts
+        if (numChannels >= 2) {
+          const ch1 = e.inputBuffer.getChannelData(1);
+          for (let i = 0; i < ch0.length; i++) {
+            const s0 = ch0[i];
+            const s1 = ch1[i];
+            // Take the max magnitude sample between Left (Ch0) and Right (Ch1)
+            chunk[i] = (Math.abs(s0) >= Math.abs(s1) ? s0 : s1) * gainMultiplier;
+          }
+        } else {
+          for (let i = 0; i < ch0.length; i++) {
+            chunk[i] = ch0[i] * gainMultiplier;
+          }
+        }
+      }
+
+      this.processAudioChunk(chunk);
     };
 
+    // Zero-gain node ensures the Web Audio clock stays active while avoiding speaker feedback / howl
+    this.gainNode = this.audioContext.createGain();
+    this.gainNode.gain.value = 0;
+
     this.sourceNode.connect(this.scriptNode);
-    this.scriptNode.connect(this.audioContext.destination);
+    this.scriptNode.connect(this.gainNode);
+    this.gainNode.connect(this.audioContext.destination);
   }
 
   private gnuRadioInterval: number | null = null;
@@ -410,9 +499,17 @@ export class AudioProcessorEngine {
       clearInterval(this.gnuRadioInterval);
       this.gnuRadioInterval = null;
     }
+    if (this.gainNode) {
+      this.gainNode.disconnect();
+      this.gainNode = null;
+    }
     if (this.scriptNode) {
       this.scriptNode.disconnect();
       this.scriptNode = null;
+    }
+    if (this.analyserNode) {
+      this.analyserNode.disconnect();
+      this.analyserNode = null;
     }
     if (this.sourceNode) {
       this.sourceNode.disconnect();
@@ -443,6 +540,9 @@ export class AudioProcessorEngine {
         recording: false,
         status: 'idle',
         peak_dbfs: -90,
+        ambient_noise_dbfs: Math.round(this.ambientNoiseFloor * 10) / 10,
+        waveform: new Array(128).fill(0),
+        spectrum: new Array(32).fill(0),
       });
     }
   }
@@ -452,6 +552,60 @@ export class AudioProcessorEngine {
     // dBFS calculation
     const level_dbfs = 20 * Math.log10(Math.max(rms, 1e-5));
     const speech_probability = this.computeSpeechProbability(chunk, rms);
+
+    // Track ambient background noise floor during quiet periods
+    if (rms < 0.02 && level_dbfs > -85) {
+      this.ambientNoiseFloor = this.ambientNoiseFloor * 0.96 + level_dbfs * 0.04;
+    }
+
+    // Downsample chunk for real-time waveform visualization (128 points)
+    const waveformLength = 128;
+    const waveform: number[] = new Array(waveformLength);
+    const step = chunk.length / waveformLength;
+    for (let i = 0; i < waveformLength; i++) {
+      const idx = Math.floor(i * step);
+      waveform[i] = Math.round((chunk[idx] || 0) * 10000) / 10000;
+    }
+
+    // Extract real-time 32-band frequency distribution (0 to 8000 Hz)
+    const numBands = 32;
+    const spectrum: number[] = new Array(numBands).fill(0);
+
+    if (this.analyserNode) {
+      const binCount = this.analyserNode.frequencyBinCount;
+      const freqBytes = new Uint8Array(binCount);
+      this.analyserNode.getByteFrequencyData(freqBytes);
+      const bandStep = binCount / numBands;
+      for (let b = 0; b < numBands; b++) {
+        const start = Math.floor(b * bandStep);
+        const end = Math.min(binCount, Math.floor((b + 1) * bandStep));
+        let sum = 0;
+        let count = 0;
+        for (let k = start; k < end; k++) {
+          sum += freqBytes[k];
+          count++;
+        }
+        const avg = count > 0 ? sum / count : 0;
+        spectrum[b] = Math.round((avg / 255) * 1000) / 1000;
+      }
+    } else {
+      // Sub-sampled DFT bandpass filter bank approximation for synthetic SDR streams
+      const stride = 4;
+      for (let b = 0; b < numBands; b++) {
+        const freq = 60 + Math.pow(b / (numBands - 1), 1.6) * 7800;
+        const omega = (2 * Math.PI * freq) / this.sampleRate;
+        let cosSum = 0;
+        let sinSum = 0;
+        let count = 0;
+        for (let i = 0; i < chunk.length; i += stride) {
+          cosSum += chunk[i] * Math.cos(omega * i);
+          sinSum += chunk[i] * Math.sin(omega * i);
+          count++;
+        }
+        const mag = Math.sqrt(cosSum * cosSum + sinSum * sinSum) / Math.max(1, count);
+        spectrum[b] = Math.min(1.0, Math.round(mag * 22 * 1000) / 1000);
+      }
+    }
 
     // Calibration accumulation
     if (this.isCalibrating) {
@@ -533,6 +687,9 @@ export class AudioProcessorEngine {
         status: currentStatus,
         current_duration_sec: Math.round(current_duration_sec * 10) / 10,
         peak_dbfs: Math.round(level_dbfs * 10) / 10,
+        ambient_noise_dbfs: Math.round(this.ambientNoiseFloor * 10) / 10,
+        waveform,
+        spectrum,
       });
     }
   }
@@ -716,5 +873,17 @@ export class AudioProcessorEngine {
         });
       }, durationSec * 1000);
     });
+  }
+
+  public getAnalyserNode(): AnalyserNode | null {
+    return this.analyserNode;
+  }
+
+  public getSampleRate(): number {
+    return this.sampleRate;
+  }
+
+  public getAudioContext(): AudioContext | null {
+    return this.audioContext;
   }
 }

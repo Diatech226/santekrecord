@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Play, Pause, Download, Trash2, FileText, Activity } from 'lucide-react';
+import { Play, Pause, Download, Trash2, FileText, Activity, Check, Loader2 } from 'lucide-react';
 import { RecordingMeta } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import { WaveformCanvas } from './WaveformCanvas';
+import { downloadRecordingWav } from '../services/wavDownloader';
 
 interface Props {
   recording: RecordingMeta;
@@ -19,15 +20,31 @@ export const AudioPlayer: React.FC<Props> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(recording.duration_seconds || 0);
+  const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [hasDownloaded, setHasDownloaded] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const audioUrl = recording.audio_url || `/api/recordings/${recording.recording_id}/audio`;
+
+  const speedOptions = [0.5, 1.0, 1.5];
 
   useEffect(() => {
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(recording.duration_seconds || 0);
-  }, [recording.recording_id, recording.duration_seconds]);
+    setHasDownloaded(false);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
+    }
+  }, [recording.recording_id, recording.duration_seconds, playbackRate]);
+
+  const handleSpeedChange = (speed: number) => {
+    setPlaybackRate(speed);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = speed;
+    }
+  };
 
   const togglePlay = () => {
     if (!audioRef.current) return;
@@ -78,13 +95,18 @@ export const AudioPlayer: React.FC<Props> = ({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleDownload = () => {
-    const a = document.createElement('a');
-    a.href = audioUrl;
-    a.download = recording.filename_wav || `${recording.recording_id}.wav`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDownloadWav = async () => {
+    if (isDownloading) return;
+    try {
+      setIsDownloading(true);
+      await downloadRecordingWav(recording);
+      setHasDownloaded(true);
+      setTimeout(() => setHasDownloaded(false), 2000);
+    } catch (err) {
+      console.error('Failed to download WAV via Blob URL:', err);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -128,13 +150,25 @@ export const AudioPlayer: React.FC<Props> = ({
           )}
 
           <button
-            id={`download-btn-${recording.recording_id}`}
+            id={`download-wav-btn-${recording.recording_id}`}
             type="button"
             title={t.downloadWav}
-            onClick={handleDownload}
-            className="p-1.5 rounded bg-[#151619] hover:bg-[#2A2B2F] border border-[#2A2B2F] text-[#A0A0A0] hover:text-[#00F0FF] transition-colors"
+            onClick={handleDownloadWav}
+            disabled={isDownloading}
+            className={`px-2 py-1 rounded border text-[11px] flex items-center gap-1.5 transition-all font-mono uppercase tracking-wider font-semibold shadow-xs ${
+              hasDownloaded
+                ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400'
+                : 'bg-[#00F0FF]/10 hover:bg-[#00F0FF]/20 border-[#00F0FF]/40 text-[#00F0FF] hover:border-[#00F0FF]'
+            } disabled:opacity-50`}
           >
-            <Download className="w-3.5 h-3.5" />
+            {isDownloading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : hasDownloaded ? (
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden sm:inline">{t.downloadWav}</span>
           </button>
 
           {onDelete && (
@@ -201,6 +235,29 @@ export const AudioPlayer: React.FC<Props> = ({
         <span className="text-[10px] font-mono text-[#606060] whitespace-nowrap">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
+
+        {/* Playback Speed Selector (0.5x, 1.0x, 1.5x) */}
+        <div id={`speed-selector-${recording.recording_id}`} className="flex items-center border border-[#1F2228] bg-[#151619] rounded p-0.5 shrink-0">
+          {speedOptions.map((speed) => {
+            const isActive = playbackRate === speed;
+            return (
+              <button
+                key={speed}
+                id={`speed-${speed}x-${recording.recording_id}`}
+                type="button"
+                onClick={() => handleSpeedChange(speed)}
+                title={`${t.playbackSpeed}: ${speed}x`}
+                className={`px-1.5 py-0.5 text-[9px] font-mono rounded font-bold transition-all ${
+                  isActive
+                    ? 'bg-[#00F0FF] text-[#0A0B0D] shadow-xs'
+                    : 'text-[#70727A] hover:text-[#E0E0E0]'
+                }`}
+              >
+                {speed.toFixed(1)}x
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

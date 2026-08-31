@@ -108,6 +108,8 @@ export const api = {
       silence_seconds: 2.0,
       auto_trim_silence: true,
       trim_margin_seconds: 0.2,
+      input_gain: 1.0,
+      input_channel: 'auto',
       frequency_hz: 145000000,
       modulation: 'NFM',
       station_id: 'ST001',

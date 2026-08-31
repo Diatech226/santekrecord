@@ -17,13 +17,13 @@ import { AudioPlayer } from './components/AudioPlayer';
 import { RecordingsHistory } from './components/RecordingsHistory';
 import { CalibrationModal } from './components/CalibrationModal';
 import { MetadataModal } from './components/MetadataModal';
-import { Power, AlertTriangle, RefreshCw, Sparkles, Globe, Palette } from 'lucide-react';
+import { Power, AlertTriangle, RefreshCw, Sparkles, Globe, Activity, Gauge, Sun, Moon } from 'lucide-react';
 import { useLanguage } from './i18n/LanguageContext';
 import { useTheme } from './theme/ThemeContext';
 
 export default function App() {
   const { language, setLanguage, t } = useLanguage();
-  const { theme, setTheme, currentThemeOption, themeOptions } = useTheme();
+  const { theme, setTheme, isLight, currentThemeOption } = useTheme();
   const accentColor = currentThemeOption.primaryColor;
 
   // Application State
@@ -49,6 +49,9 @@ export default function App() {
   const [levelDbfs, setLevelDbfs] = useState(-90);
   const [speechProb, setSpeechProb] = useState(0);
   const [voiceDetected, setVoiceDetected] = useState(false);
+  const [ambientNoiseDbfs, setAmbientNoiseDbfs] = useState<number>(-60);
+  const [liveWaveform, setLiveWaveform] = useState<number[]>(() => new Array(128).fill(0));
+  const [spectrum, setSpectrum] = useState<number[]>(() => new Array(32).fill(0));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [uptimeSeconds, setUptimeSeconds] = useState(0);
 
@@ -57,6 +60,30 @@ export default function App() {
   const [selectedRecording, setSelectedRecording] = useState<RecordingMeta | null>(null);
   const [metaModalRecording, setMetaModalRecording] = useState<RecordingMeta | null>(null);
   const [isCalibModalOpen, setIsCalibModalOpen] = useState(false);
+
+  // Dynamic Browser Tab Title Recording Indicator (Pulsing Red)
+  useEffect(() => {
+    const isRecordingNow = status === 'recording' || status === 'voice_detected';
+    
+    if (isRecordingNow) {
+      let pulse = false;
+      const interval = setInterval(() => {
+        pulse = !pulse;
+        const dot = pulse ? '🔴' : '⭕';
+        const dur = durationSec > 0 ? ` [${durationSec.toFixed(0)}s]` : '';
+        document.title = `${dot} REC${dur} | Auto Voice Recorder`;
+      }, 500);
+
+      return () => {
+        clearInterval(interval);
+        document.title = isMonitoring ? '🟢 [SURVEILLANCE] Auto Voice Recorder' : 'Auto Voice Recorder';
+      };
+    } else if (isMonitoring) {
+      document.title = '🟢 [SURVEILLANCE] Auto Voice Recorder';
+    } else {
+      document.title = 'Auto Voice Recorder';
+    }
+  }, [status, isMonitoring, durationSec]);
 
   // Audio Engine Ref
   const engineRef = useRef<AudioProcessorEngine | null>(null);
@@ -141,6 +168,8 @@ export default function App() {
       setSpeechProb(0);
       setVoiceDetected(false);
       setDurationSec(0);
+      setLiveWaveform(new Array(128).fill(0));
+      setSpectrum(new Array(32).fill(0));
     } else {
       // Start
       const engine = new AudioProcessorEngine(settings);
@@ -152,6 +181,15 @@ export default function App() {
           setSpeechProb(update.speech_probability);
           setVoiceDetected(update.voice_detected);
           setStatus(update.status);
+          if (update.ambient_noise_dbfs !== undefined) {
+            setAmbientNoiseDbfs(update.ambient_noise_dbfs);
+          }
+          if (update.waveform) {
+            setLiveWaveform(update.waveform);
+          }
+          if (update.spectrum) {
+            setSpectrum(update.spectrum);
+          }
           if (update.current_duration_sec !== undefined) {
             setDurationSec(update.current_duration_sec);
           }
@@ -166,6 +204,8 @@ export default function App() {
 
       const ok = await engine.start();
       if (ok) {
+        // Refresh available audio device list now that microphone permission was granted
+        api.getAudioDevices().then((devs) => setDevices(devs)).catch(() => {});
         await api.startMonitoring(settings);
         setIsMonitoring(true);
         setStatus('listening');
@@ -209,7 +249,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0A0B0D] text-[#E0E0E0] flex flex-col justify-between p-4 lg:p-8 font-mono select-none">
+    <div className="min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] flex flex-col justify-between p-4 lg:p-8 font-mono select-none transition-colors duration-200">
       <div className="w-full max-w-7xl mx-auto flex-1 flex flex-col">
         
         {/* Header / Hardware Top Bar */}
@@ -230,7 +270,7 @@ export default function App() {
             </span>
           </div>
 
-          <div className="flex items-center gap-4 sm:gap-6 text-[10px] text-[#606060]">
+          <div className="flex items-center gap-3 sm:gap-4 text-[10px] text-[#606060]">
             <div className="hidden sm:block">
               {t.uptime} <span className="text-[#A0A0A0]">{formatUptime(uptimeSeconds)}</span>
             </div>
@@ -252,8 +292,56 @@ export default function App() {
               <span>{t.engine} {isMonitoring ? t.engineActive : t.engineReady}</span>
             </div>
 
+            {/* Dark / White Theme Toggle Switch */}
+            <div id="theme-switch-header" className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px]">
+              <button
+                id="theme-dark-btn"
+                type="button"
+                onClick={() => setTheme('kali-dark')}
+                style={
+                  !isLight
+                    ? {
+                        backgroundColor: accentColor,
+                        color: '#0A0B0D',
+                      }
+                    : undefined
+                }
+                className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold transition-all ${
+                  !isLight
+                    ? 'shadow-sm'
+                    : 'text-[#808080] hover:text-[#E0E0E0]'
+                }`}
+                title={t.themeDark}
+              >
+                <Moon className="w-3 h-3" />
+                <span className="hidden sm:inline">{t.themeDark}</span>
+              </button>
+              <button
+                id="theme-light-btn"
+                type="button"
+                onClick={() => setTheme('white-terminal')}
+                style={
+                  isLight
+                    ? {
+                        backgroundColor: accentColor,
+                        color: '#FFFFFF',
+                      }
+                    : undefined
+                }
+                className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold transition-all ${
+                  isLight
+                    ? 'shadow-sm'
+                    : 'text-[#808080] hover:text-[#E0E0E0]'
+                }`}
+                title={t.themeLight}
+              >
+                <Sun className="w-3 h-3" />
+                <span className="hidden sm:inline">{t.themeLight}</span>
+              </button>
+            </div>
+
             {/* Language Selector */}
-            <div className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px] ml-1">
+            <div className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px]">
               <button
                 id="lang-en-btn"
                 type="button"
@@ -262,7 +350,7 @@ export default function App() {
                   language === 'en'
                     ? {
                         backgroundColor: accentColor,
-                        color: '#0A0B0D',
+                        color: isLight ? '#FFFFFF' : '#0A0B0D',
                       }
                     : undefined
                 }
@@ -283,7 +371,7 @@ export default function App() {
                   language === 'fr'
                     ? {
                         backgroundColor: accentColor,
-                        color: '#0A0B0D',
+                        color: isLight ? '#FFFFFF' : '#0A0B0D',
                       }
                     : undefined
                 }
@@ -413,6 +501,42 @@ export default function App() {
                 <StatusIndicator status={status} durationSec={durationSec} />
               </div>
 
+              {/* Informative Sound Card & Live Acquisition Banner */}
+              {!isMonitoring ? (
+                <div id="soundcard-standby-banner" className="p-3 bg-[#151619] border border-[#2A2B2F] rounded text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2 text-[#A0A0A0]">
+                    <Activity className="w-4 h-4 text-[#00F0FF] shrink-0" />
+                    <span>{t.soundCardInactiveNotice}</span>
+                  </div>
+                  <button
+                    id="btn-quick-start-monitor"
+                    type="button"
+                    onClick={toggleMonitoring}
+                    className="px-3 py-1 bg-[#00F0FF] hover:bg-[#00F0FF]/80 text-[#0A0B0D] font-bold rounded text-[11px] uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(0,240,255,0.3)] shrink-0"
+                  >
+                    {t.startSurveillance}
+                  </button>
+                </div>
+              ) : isMonitoring && levelDbfs <= -75 ? (
+                <div id="soundcard-quiet-banner" className="p-3 bg-[#FFB800]/10 border border-[#FFB800]/30 rounded text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-[#FFB800]">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{t.soundCardQuietNotice}</span>
+                  </div>
+                  <button
+                    id="btn-quick-boost-gain"
+                    type="button"
+                    onClick={() => {
+                      const nextGain = Math.min(8.0, (settings.input_gain ?? 1.0) * 2.0);
+                      handleUpdateSettings({ input_gain: nextGain });
+                    }}
+                    className="px-2.5 py-1 bg-[#FFB800]/20 hover:bg-[#FFB800]/30 text-[#FFB800] border border-[#FFB800]/40 rounded text-[10px] uppercase font-mono tracking-wider transition-colors shrink-0"
+                  >
+                    +6dB Gain ({(settings.input_gain ?? 1.0) * 2.0}x)
+                  </button>
+                </div>
+              ) : null}
+
               {/* Hardware LED Meter */}
               <AudioMeter
                 levelDbfs={levelDbfs}
@@ -421,31 +545,132 @@ export default function App() {
                 vadThreshold={settings.vad_threshold}
                 voiceDetected={voiceDetected}
                 isMonitoring={isMonitoring}
+                ambientNoiseDbfs={ambientNoiseDbfs}
+                liveWaveform={liveWaveform}
+                spectrum={spectrum}
               />
 
-              {/* 3-Stat Telemetry Hardware Block */}
-              <div className="grid grid-cols-3 gap-3 pt-1">
-                <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded">
-                  <div className="text-[9px] text-[#606060] uppercase tracking-wider mb-1">{t.vadConfidenceMetric}</div>
-                  <div style={{ color: accentColor }} className="text-base lg:text-lg font-mono font-bold">
-                    {isMonitoring ? speechProb.toFixed(2) : '--'}
-                  </div>
-                </div>
+              {/* 4-Stat Telemetry Hardware Block including Dedicated Signal-to-Noise Ratio (SNR) */}
+              {(() => {
+                const snrDb = (isMonitoring && ambientNoiseDbfs !== undefined && levelDbfs > ambientNoiseDbfs)
+                  ? Math.max(0, levelDbfs - ambientNoiseDbfs)
+                  : 0;
 
-                <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded">
-                  <div className="text-[9px] text-[#606060] uppercase tracking-wider mb-1">{t.recDuration}</div>
-                  <div className="text-base lg:text-lg font-mono font-bold text-[#E0E0E0]">
-                    {durationSec > 0 ? `${durationSec.toFixed(1)}s` : '00:00'}
-                  </div>
-                </div>
+                let snrQualityText = t.snrPoor;
+                let snrColor = '#80828A';
+                let snrBadgeBg = 'bg-[#15161A] border-[#252830] text-[#70727A]';
+                let snrBarPercent = 0;
 
-                <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded">
-                  <div className="text-[9px] text-[#606060] uppercase tracking-wider mb-1">{t.formatCodec}</div>
-                  <div className="text-base lg:text-lg font-mono font-bold text-[#A0A0A0] truncate">
-                    16k PCM
+                if (isMonitoring && ambientNoiseDbfs !== undefined) {
+                  snrBarPercent = Math.min(100, Math.max(0, (snrDb / 30) * 100));
+                  if (snrDb >= 20) {
+                    snrQualityText = t.snrExcellent;
+                    snrColor = '#00F0FF';
+                    snrBadgeBg = 'bg-[#00F0FF]/15 border-[#00F0FF]/40 text-[#00F0FF] shadow-[0_0_8px_rgba(0,240,255,0.25)]';
+                  } else if (snrDb >= 12) {
+                    snrQualityText = t.snrGood;
+                    snrColor = '#00FF66';
+                    snrBadgeBg = 'bg-[#00FF66]/15 border-[#00FF66]/40 text-[#00FF66] shadow-[0_0_8px_rgba(0,255,102,0.2)]';
+                  } else if (snrDb >= 6) {
+                    snrQualityText = t.snrFair;
+                    snrColor = '#FFB800';
+                    snrBadgeBg = 'bg-[#FFB800]/15 border-[#FFB800]/40 text-[#FFB800]';
+                  } else {
+                    snrQualityText = t.snrPoor;
+                    snrColor = '#FF4444';
+                    snrBadgeBg = 'bg-[#FF4444]/10 border-[#FF4444]/30 text-[#FF4444]';
+                  }
+                }
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                    {/* Dedicated Signal-to-Noise Ratio (SNR) Telemetry Card */}
+                    <div id="snr-telemetry-card" className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2 relative overflow-hidden group hover:border-[#2A2B35] transition-colors">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-[9px] text-[#606060] uppercase tracking-wider font-semibold">
+                          <Gauge className="w-3 h-3 text-[#00F0FF]" />
+                          <span>{t.snrMetric}</span>
+                        </div>
+                        <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded border uppercase font-bold tracking-wider ${snrBadgeBg}`}>
+                          {isMonitoring ? snrQualityText : t.systemStandby}
+                        </span>
+                      </div>
+
+                      <div className="flex items-baseline justify-between">
+                        <div style={{ color: isMonitoring ? snrColor : '#50525A' }} className="text-xl font-mono font-bold tracking-tight">
+                          {isMonitoring ? `+${snrDb.toFixed(1)}` : '--.-'} <span className="text-xs font-normal text-[#70727A]">dB</span>
+                        </div>
+                        <div className="text-[9px] font-mono text-[#50525A] text-right" title="Signal dBFS minus Calibrated Ambient Noise Floor">
+                          {isMonitoring && ambientNoiseDbfs !== undefined ? `Δ ${levelDbfs.toFixed(0)} - (${ambientNoiseDbfs.toFixed(0)})` : 'Δ --'}
+                        </div>
+                      </div>
+
+                      {/* SNR Visual Scale Bar (0 to 30 dB dynamic range) */}
+                      <div className="space-y-1">
+                        <div className="w-full bg-[#141518] h-1.5 rounded-full overflow-hidden border border-[#202228] flex">
+                          <div
+                            style={{
+                              width: `${isMonitoring ? snrBarPercent : 0}%`,
+                              backgroundColor: snrColor,
+                              boxShadow: isMonitoring ? `0 0 6px ${snrColor}` : 'none',
+                            }}
+                            className="h-full transition-all duration-150 rounded-full"
+                          />
+                        </div>
+                        <div className="flex justify-between text-[7.5px] font-mono text-[#40424A]">
+                          <span>0dB</span>
+                          <span>+12dB</span>
+                          <span>+24dB+</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* VAD Confidence Metric */}
+                    <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2">
+                      <div className="text-[9px] text-[#606060] uppercase tracking-wider">{t.vadConfidenceMetric}</div>
+                      <div className="flex items-baseline justify-between">
+                        <div style={{ color: accentColor }} className="text-xl font-mono font-bold">
+                          {isMonitoring ? speechProb.toFixed(2) : '--'}
+                        </div>
+                        <div className="text-[9px] font-mono text-[#50525A]">
+                          / {settings.vad_threshold.toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="w-full bg-[#141518] h-1.5 rounded-full overflow-hidden border border-[#202228]">
+                        <div
+                          style={{
+                            width: `${isMonitoring ? Math.min(100, Math.round(speechProb * 100)) : 0}%`,
+                            backgroundColor: accentColor,
+                          }}
+                          className="h-full transition-all duration-100 rounded-full"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Recording Duration Metric */}
+                    <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2">
+                      <div className="text-[9px] text-[#606060] uppercase tracking-wider">{t.recDuration}</div>
+                      <div className="text-xl font-mono font-bold text-[#E0E0E0]">
+                        {durationSec > 0 ? `${durationSec.toFixed(1)}s` : '00:00'}
+                      </div>
+                      <div className="text-[9px] font-mono text-[#50525A]">
+                        {status === 'RECORDING' ? t.statusRecording : t.statusIdle}
+                      </div>
+                    </div>
+
+                    {/* Format Codec Metric */}
+                    <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2">
+                      <div className="text-[9px] text-[#606060] uppercase tracking-wider">{t.formatCodec}</div>
+                      <div className="text-xl font-mono font-bold text-[#A0A0A0] truncate">
+                        16k PCM
+                      </div>
+                      <div className="text-[9px] font-mono text-[#50525A]">
+                        Float32 / Mono
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                );
+              })()}
             </div>
 
             {/* Active / Last Recording Player */}

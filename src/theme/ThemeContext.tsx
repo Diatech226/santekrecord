@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
-export type KaliTheme = 'kali-dark' | 'terminal-green' | 'kali-blue' | 'white-terminal';
+export type KaliTheme = 'kali-dark' | 'white-terminal';
 
 export interface ThemeOption {
   id: KaliTheme;
@@ -18,47 +18,29 @@ export const THEME_OPTIONS: ThemeOption[] = [
     id: 'kali-dark',
     nameKey: 'themeKaliDark',
     defaultName: 'Kali Stealth Dark',
-    tag: 'CYAN',
+    tag: 'DARK',
     primaryColor: '#00F0FF',
     bgPreview: '#0A0B0D',
     borderPreview: '#1A1B1F',
     accentPreview: '#00F0FF',
   },
   {
-    id: 'terminal-green',
-    nameKey: 'themeTerminalGreen',
-    defaultName: 'Terminal Green',
-    tag: 'PHOSPHOR',
-    primaryColor: '#00FF66',
-    bgPreview: '#050B06',
-    borderPreview: '#15301B',
-    accentPreview: '#00FF66',
-  },
-  {
-    id: 'kali-blue',
-    nameKey: 'themeKaliBlue',
-    defaultName: 'Kali Dragon Blue',
-    tag: 'COBALT',
-    primaryColor: '#388BFD',
-    bgPreview: '#060A14',
-    borderPreview: '#172A52',
-    accentPreview: '#388BFD',
-  },
-  {
     id: 'white-terminal',
     nameKey: 'themeWhiteTerminal',
-    defaultName: 'White Terminal',
+    defaultName: 'Clean White Workstation',
     tag: 'LIGHT',
-    primaryColor: '#0088AA',
-    bgPreview: '#F3F4F6',
-    borderPreview: '#D1D5DB',
-    accentPreview: '#0088AA',
+    primaryColor: '#0284C7',
+    bgPreview: '#F8FAFC',
+    borderPreview: '#E2E8F0',
+    accentPreview: '#0284C7',
   },
 ];
 
 interface ThemeContextType {
   theme: KaliTheme;
+  isLight: boolean;
   setTheme: (theme: KaliTheme) => void;
+  toggleTheme: () => void;
   themeOptions: ThemeOption[];
   currentThemeOption: ThemeOption;
 }
@@ -71,12 +53,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [theme, setThemeState] = useState<KaliTheme>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (
-        saved === 'kali-dark' ||
-        saved === 'terminal-green' ||
-        saved === 'kali-blue' ||
-        saved === 'white-terminal'
-      ) {
+      if (saved === 'white-terminal' || saved === 'kali-dark') {
         return saved;
       }
     } catch {
@@ -94,20 +71,29 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Sync data-theme attribute on document.documentElement
+  const toggleTheme = () => {
+    setTheme(theme === 'kali-dark' ? 'white-terminal' : 'kali-dark');
+  };
+
+  // Sync data-theme attribute and classes on document.documentElement and body
   useEffect(() => {
     if (typeof document !== 'undefined') {
       document.documentElement.setAttribute('data-theme', theme);
       if (theme === 'white-terminal') {
         document.documentElement.classList.add('theme-light');
         document.documentElement.classList.remove('theme-dark');
+        document.body.classList.add('theme-light');
+        document.body.classList.remove('theme-dark');
       } else {
         document.documentElement.classList.add('theme-dark');
         document.documentElement.classList.remove('theme-light');
+        document.body.classList.add('theme-dark');
+        document.body.classList.remove('theme-light');
       }
     }
   }, [theme]);
 
+  const isLight = theme === 'white-terminal';
   const currentThemeOption =
     THEME_OPTIONS.find((t) => t.id === theme) || THEME_OPTIONS[0];
 
@@ -115,7 +101,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <ThemeContext.Provider
       value={{
         theme,
+        isLight,
         setTheme,
+        toggleTheme,
         themeOptions: THEME_OPTIONS,
         currentThemeOption,
       }}

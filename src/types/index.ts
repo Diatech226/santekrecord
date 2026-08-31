@@ -34,6 +34,9 @@ export interface AppSettings {
   // Auto Trim Dead Air / Silence Post-Processing
   auto_trim_silence?: boolean;
   trim_margin_seconds?: number;
+  // Sound Card Gain & Channel Routing
+  input_gain?: number;
+  input_channel?: 'auto' | 'channel_1' | 'channel_2';
   // HackRF / GNU Radio specific
   frequency_hz?: number;
   modulation?: string;
@@ -49,6 +52,9 @@ export interface MonitorUpdate {
   status: EngineStatus;
   current_duration_sec?: number;
   peak_dbfs?: number;
+  ambient_noise_dbfs?: number;
+  waveform?: number[];
+  spectrum?: number[];
   active_source?: string;
   error_message?: string | null;
 }

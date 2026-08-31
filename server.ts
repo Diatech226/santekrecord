@@ -9,7 +9,7 @@ import { createServer as createViteServer } from 'vite';
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 
 /**
  * Open the application in the user's default browser in development.  Vite's
