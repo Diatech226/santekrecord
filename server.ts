@@ -4,10 +4,37 @@ import path from 'path';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import multer from 'multer';
+import { exec } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+const HOST = process.env.HOST || '127.0.0.1';
+
+/**
+ * Open the application in the user's default browser in development.  Vite's
+ * usual `server.open` option is not applied when Vite runs as Express
+ * middleware, so `npm run dev` previously started silently and left users on
+ * an empty terminal wondering where the UI was.
+ */
+function openBrowser(url: string) {
+  if (process.env.NODE_ENV === 'production' || process.env.NO_OPEN === 'true') {
+    return;
+  }
+
+  const command =
+    process.platform === 'win32'
+      ? `start "" "${url}"`
+      : process.platform === 'darwin'
+        ? `open "${url}"`
+        : `xdg-open "${url}"`;
+
+  exec(command, (error) => {
+    if (error) {
+      console.log(`Open ${url} manually in your browser.`);
+    }
+  });
+}
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -280,8 +307,23 @@ async function start() {
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Auto Voice Recorder server running on http://0.0.0.0:${PORT}`);
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Stop the other process or set a different PORT.`);
+    } else {
+      console.error('Unable to start Auto Voice Recorder:', error.message);
+    }
+    process.exitCode = 1;
+  });
+
+  server.listen(PORT, HOST, () => {
+    // Use the explicit IPv4 loopback address. On some Windows installations,
+    // localhost resolves to IPv6 (::1), while a server bound to IPv4 cannot be
+    // reached there and the browser reports "site inaccessible".
+    const browserHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
+    const appUrl = `http://${browserHost}:${PORT}`;
+    console.log(`Auto Voice Recorder is ready at ${appUrl}`);
+    openBrowser(appUrl);
   });
 }
 
