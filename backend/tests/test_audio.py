@@ -30,6 +30,8 @@ class FakeSoundDevice:
 def test_device_filtering(monkeypatch):
     monkeypatch.setattr(microphone, "sd", FakeSoundDevice)
     assert [d["name"] for d in MicrophoneSource.list_devices()] == ["Built-in", "USB Audio"]
+    assert MicrophoneSource.list_devices()[1]["type"] == "usb"
+    assert all(device["device_kind"] == "hardware" for device in MicrophoneSource.list_devices())
 
 
 def test_real_portaudio_device_id(monkeypatch):

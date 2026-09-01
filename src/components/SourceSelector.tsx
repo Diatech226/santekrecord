@@ -22,9 +22,15 @@ export const SourceSelector: React.FC<Props> = ({
 }) => {
   const { t } = useLanguage();
 
-  const filteredDevices = devices.filter((device) =>
-    source === 'usb' ? device.type === 'usb' || device.type === 'line' : device.type === 'microphone'
-  );
+  // PortAudio/ALSA does not expose a reliable "USB" flag. Many interfaces have
+  // generic names (CODEC, Audio, capture...) and used to disappear because the
+  // backend could only classify devices whose name literally contained USB.
+  const filteredDevices = devices.filter((device) => {
+    if (source === 'usb') {
+      return device.type === 'usb' || device.type === 'line' || device.device_kind === 'hardware';
+    }
+    return device.type === 'microphone';
+  });
 
   return (
     <div id="source-selector-block" className="space-y-4 font-mono">

@@ -16,7 +16,12 @@ export default defineConfig(() => {
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      watch: process.env.DISABLE_HMR === 'true' ? null : {
+        // The backend persists every settings change here. Watching this runtime
+        // file makes Vite perform a full-page reload when, for example, the USB
+        // source button is clicked.
+        ignored: ['**/config.json', '**/recordings/**'],
+      },
     },
   };
 });
