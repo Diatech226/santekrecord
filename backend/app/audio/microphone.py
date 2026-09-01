@@ -32,26 +32,69 @@ class MicrophoneSource(AudioSource):
         self._callback_log_at = 0.0
 
     @classmethod
+    def _detect_usb_cards_from_proc(cls) -> set:
+        """Inspect /proc/asound/cards on Linux to find USB sound cards."""
+        usb_cards = set()
+        try:
+            if os.path.exists("/proc/asound/cards"):
+                with open("/proc/asound/cards", "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                # Lines like: " 1 [CODEC          ]: USB-Audio - USB Audio CODEC"
+                for line in content.splitlines():
+                    lowered = line.lower()
+                    if "usb" in lowered:
+                        import re
+                        m = re.search(r"^\s*(\d+)\s+\[([^\]]+)\]", line)
+                        if m:
+                            usb_cards.add(m.group(1)) # card number
+                            usb_cards.add(m.group(2).strip().lower()) # card id
+        except Exception:
+            pass
+        return usb_cards
+
+    @classmethod
     def list_devices(cls) -> List[Dict[str, Any]]:
         if sd is None:
             return []
         try:
+            # Re-query sounddevice devices
             device_list = sd.query_devices()
             host_apis = sd.query_hostapis()
+            usb_cards = cls._detect_usb_cards_from_proc()
             inputs = []
             default_input = sd.default.device[0] if sd.default.device else 0
+            
+            usb_keywords = (
+                "usb", "external", "codec", "c-media", "cm108", "cm106", "pcm29",
+                "focusrite", "scarlett", "behringer", "u-phoria", "umc", "yeti",
+                "snowball", "rode", "fifine", "hyperx", "jabra", "plantronics",
+                "headset", "headphone", "soundcard", "sound card", "audio adapter",
+                "dac", "adc", "dongle", "card=device", "card=codec", "card=audio",
+                "card=sound", "card=mic", "hw:1", "hw:2", "plughw:1", "plughw:2"
+            )
+
             for idx, dev in enumerate(device_list):
                 if dev.get("max_input_channels", 0) > 0:
                     name = dev.get("name", f"Device {idx}")
                     lowered = name.lower()
-                    is_usb = "usb" in lowered or "external" in lowered
-                    is_line = "line" in name.lower()
+                    
+                    # Check if device is a USB sound card
+                    is_usb = any(k in lowered for k in usb_keywords)
+                    if not is_usb and usb_cards:
+                        for card in usb_cards:
+                            if f"card={card}" in lowered or f"hw:{card}" in lowered or f"[{card}]" in lowered:
+                                is_usb = True
+                                break
+
+                    is_line = "line" in lowered or "aux" in lowered
+
                     if lowered in {"default", "sysdefault"}:
                         device_kind = "default"
                     elif any(token in lowered for token in ("pulse", "pipewire", "jack")):
                         device_kind = "virtual"
                     else:
                         device_kind = "hardware"
+
                     inputs.append({
                         "id": idx,
                         "name": name,

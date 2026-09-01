@@ -38,6 +38,35 @@ export interface AudioDiagnostics {
   error?: string | null;
 }
 
+export interface UsbDiagnosticCheck {
+  id: string;
+  name: string;
+  category: 'groups' | 'permissions' | 'devices' | 'services';
+  status: 'pass' | 'warn' | 'fail';
+  message: string;
+  details?: string;
+  fix_command?: string;
+}
+
+export interface UsbTroubleshootResult {
+  timestamp: string;
+  platform: string;
+  user: string;
+  groups: string[];
+  in_audio_group: boolean;
+  in_plugdev_group: boolean;
+  dev_snd_exists: boolean;
+  dev_snd_readable: boolean;
+  dev_snd_nodes_count: number;
+  dev_bus_usb_exists: boolean;
+  dev_bus_usb_readable: boolean;
+  usb_devices: Array<{ id?: string; name: string }>;
+  sound_cards: Array<{ id: string | number; name: string }>;
+  audio_server: string;
+  checks: UsbDiagnosticCheck[];
+  overall_status: 'ok' | 'warning' | 'error';
+}
+
 export interface AppSettings {
   source: AudioSourceType;
   device_id: number | string | null;

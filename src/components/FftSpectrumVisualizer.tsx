@@ -67,6 +67,7 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
   const [scaleMode, setScaleMode] = useState<FreqScaleMode>('log');
   const [rangePreset, setRangePreset] = useState<FreqRangePreset>('full');
   const [showHarmonicGuides, setShowHarmonicGuides] = useState<boolean>(true);
+  const [showPeakFreqHighlight, setShowPeakFreqHighlight] = useState<boolean>(true);
   const [showPeakHold, setShowPeakHold] = useState<boolean>(true);
   const [show5sPeakMarker, setShow5sPeakMarker] = useState<boolean>(true);
   const [showMitigationTips, setShowMitigationTips] = useState<boolean>(false);

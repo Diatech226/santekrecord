@@ -74,6 +74,263 @@ def audio_diagnostics(engine=Depends(get_engine)):
     }
 
 
+@router.get("/system/usb-diagnostic")
+@router.post("/system/usb-diagnostic")
+def get_usb_diagnostic():
+    """Run a thorough Linux / Kali hardware permission & USB diagnostic check."""
+    import getpass
+    try:
+        current_user = getpass.getuser()
+    except Exception:
+        current_user = os.environ.get("USER", "kali")
+
+    # 1. Inspect groups
+    groups = []
+    try:
+        probe = subprocess.run(["id", "-Gn"], capture_output=True, text=True, timeout=2, check=False)
+        if probe.returncode == 0:
+            groups = probe.stdout.strip().split()
+    except Exception:
+        pass
+    if not groups:
+        try:
+            import grp
+            groups = [grp.getgrgid(g).gr_name for g in os.getgroups()]
+        except Exception:
+            groups = ["audio", "plugdev"] if current_user == "root" else []
+
+    is_root = current_user == "root"
+    in_audio_group = is_root or "audio" in groups
+    in_plugdev_group = is_root or "plugdev" in groups
+
+    # 2. Inspect /dev/snd
+    dev_snd_exists = os.path.exists("/dev/snd")
+    dev_snd_readable = os.access("/dev/snd", os.R_OK) if dev_snd_exists else False
+    dev_snd_nodes = []
+    if dev_snd_exists:
+        try:
+            dev_snd_nodes = os.listdir("/dev/snd")
+        except Exception:
+            pass
+
+    # 3. Inspect /dev/bus/usb
+    dev_bus_usb_exists = os.path.exists("/dev/bus/usb")
+    dev_bus_usb_readable = os.access("/dev/bus/usb", os.R_OK) if dev_bus_usb_exists else False
+
+    # 4. Enumerate USB devices via lsusb or sysfs
+    usb_devices = []
+    lsusb_tool = shutil.which("lsusb")
+    if lsusb_tool:
+        try:
+            probe = subprocess.run([lsusb_tool], capture_output=True, text=True, timeout=3, check=False)
+            if probe.returncode == 0:
+                for line in probe.stdout.strip().splitlines():
+                    if line.strip():
+                        parts = line.split(":", 1)
+                        dev_id = parts[0].strip() if len(parts) > 1 else ""
+                        name = parts[1].strip() if len(parts) > 1 else line.strip()
+                        usb_devices.append({"id": dev_id, "name": name})
+        except Exception:
+            pass
+
+    # Fallback to sysfs if lsusb returned nothing
+    if not usb_devices and os.path.exists("/sys/bus/usb/devices"):
+        try:
+            for d in os.listdir("/sys/bus/usb/devices"):
+                prod_file = os.path.join("/sys/bus/usb/devices", d, "product")
+                if os.path.exists(prod_file):
+                    with open(prod_file, "r", encoding="utf-8", errors="ignore") as f:
+                        prod = f.read().strip()
+                    if prod:
+                        usb_devices.append({"id": d, "name": prod})
+        except Exception:
+            pass
+
+    # 5. Enumerate sound cards via /proc/asound/cards
+    sound_cards = []
+    if os.path.exists("/proc/asound/cards"):
+        try:
+            with open("/proc/asound/cards", "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read().strip()
+            import re
+            for match in re.finditer(r"^\s*(\d+)\s+\[([^\]]+)\]:\s+(.+)$", content, re.MULTILINE):
+                sound_cards.append({
+                    "id": match.group(1),
+                    "name": f"[{match.group(2).strip()}] {match.group(3).strip()}",
+                })
+        except Exception:
+            pass
+
+    # 6. Check audio server (PipeWire / PulseAudio / ALSA)
+    audio_server = "ALSA Direct"
+    try:
+        user_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        if os.path.exists(os.path.join(user_runtime, "pipewire-0")) or subprocess.run(["pgrep", "-x", "pipewire"], capture_output=True).returncode == 0:
+            audio_server = "PipeWire"
+        elif os.path.exists(os.path.join(user_runtime, "pulse")) or subprocess.run(["pgrep", "-x", "pulseaudio"], capture_output=True).returncode == 0:
+            audio_server = "PulseAudio"
+    except Exception:
+        pass
+
+    # 7. Build granular diagnostic checks
+    checks = []
+
+    # Check: Audio Group
+    if in_audio_group:
+        checks.append({
+            "id": "group_audio",
+            "name": "Groupe système 'audio'",
+            "category": "groups",
+            "status": "pass",
+            "message": f"L'utilisateur '{current_user}' est membre du groupe 'audio' (accès ALSA autorisé)",
+            "details": f"Groupes détectés: {', '.join(groups) if groups else 'root'}",
+        })
+    else:
+        checks.append({
+            "id": "group_audio",
+            "name": "Groupe système 'audio'",
+            "category": "groups",
+            "status": "fail",
+            "message": f"L'utilisateur '{current_user}' n'appartient PAS au groupe 'audio'. L'accès direct au matériel audio sera bloqué par ALSA.",
+            "details": "Sur Kali Linux, les droits audio exigent l'appartenance au groupe 'audio'.",
+            "fix_command": f"sudo usermod -aG audio {current_user} && newgrp audio",
+        })
+
+    # Check: Plugdev Group
+    if in_plugdev_group:
+        checks.append({
+            "id": "group_plugdev",
+            "name": "Groupe système 'plugdev'",
+            "category": "groups",
+            "status": "pass",
+            "message": f"L'utilisateur '{current_user}' appartient au groupe 'plugdev' (USB / SDR / libusb)",
+            "details": "Autorise la communication avec les périphériques USB à chaud sans privilèges root.",
+        })
+    else:
+        checks.append({
+            "id": "group_plugdev",
+            "name": "Groupe système 'plugdev'",
+            "category": "groups",
+            "status": "warn",
+            "message": f"L'utilisateur '{current_user}' n'est pas dans le groupe 'plugdev'. Recommandé pour HackRF et cartes sons USB externes.",
+            "details": "Nécessaire pour le contrôle udev des périphériques USB non-standards.",
+            "fix_command": f"sudo usermod -aG plugdev {current_user}",
+        })
+
+    # Check: /dev/snd Node Access
+    if dev_snd_exists and dev_snd_readable:
+        pcm_nodes = [n for n in dev_snd_nodes if n.startswith("pcm") or n.startswith("control")]
+        checks.append({
+            "id": "dev_snd",
+            "name": "Permissions /dev/snd",
+            "category": "permissions",
+            "status": "pass",
+            "message": f"/dev/snd accessible en lecture ({len(pcm_nodes)} nœuds audio détectés)",
+            "details": f"Nœuds trouvés: {', '.join(pcm_nodes[:8])}{'...' if len(pcm_nodes) > 8 else ''}",
+        })
+    elif dev_snd_exists and not dev_snd_readable:
+        checks.append({
+            "id": "dev_snd",
+            "name": "Permissions /dev/snd",
+            "category": "permissions",
+            "status": "fail",
+            "message": "/dev/snd existe mais est inaccessible en lecture pour l'utilisateur actuel.",
+            "details": "Droits insuffisants sur les fichiers de périphériques ALSA.",
+            "fix_command": "sudo chmod -R a+rw /dev/snd/",
+        })
+    else:
+        checks.append({
+            "id": "dev_snd",
+            "name": "Permissions /dev/snd",
+            "category": "permissions",
+            "status": "warn",
+            "message": "Répertoire /dev/snd non trouvé (pilote ALSA non chargé ou environnement conteneurisé).",
+            "details": "Vérifiez que le module noyau snd_pcm est chargé.",
+            "fix_command": "sudo modprobe snd_pcm && sudo modprobe snd_usb_audio",
+        })
+
+    # Check: /dev/bus/usb Node Access
+    if dev_bus_usb_exists and dev_bus_usb_readable:
+        checks.append({
+            "id": "dev_bus_usb",
+            "name": "Permissions /dev/bus/usb",
+            "category": "permissions",
+            "status": "pass",
+            "message": "/dev/bus/usb accessible pour l'énumération USB",
+            "details": f"{len(usb_devices)} périphériques USB physiques listés.",
+        })
+    else:
+        checks.append({
+            "id": "dev_bus_usb",
+            "name": "Permissions /dev/bus/usb",
+            "category": "permissions",
+            "status": "warn",
+            "message": "/dev/bus/usb non accessible ou absent.",
+            "details": "Vérifiez les règles udev pour autoriser l'accès USB.",
+            "fix_command": "sudo udevadm control --reload-rules && sudo udevadm trigger",
+        })
+
+    # Check: ALSA Sound Cards Count
+    if len(sound_cards) > 0:
+        has_usb_card = any("usb" in c["name"].lower() for c in sound_cards)
+        checks.append({
+            "id": "sound_cards",
+            "name": "Cartes son ALSA reconnues",
+            "category": "devices",
+            "status": "pass",
+            "message": f"{len(sound_cards)} carte(s) son reconnue(s) par le noyau ALSA",
+            "details": ", ".join(c["name"] for c in sound_cards),
+        })
+    else:
+        checks.append({
+            "id": "sound_cards",
+            "name": "Cartes son ALSA reconnues",
+            "category": "devices",
+            "status": "warn",
+            "message": "Aucune carte son enregistrée dans /proc/asound/cards.",
+            "details": "Branchez votre carte son USB ou vérifiez 'lsusb' et 'dmesg | grep -i audio'.",
+            "fix_command": "dmesg | tail -n 20",
+        })
+
+    # Check: Audio Daemon
+    checks.append({
+        "id": "audio_daemon",
+        "name": "Serveur Audio Linux",
+        "category": "services",
+        "status": "pass" if audio_server != "ALSA Direct" else "warn",
+        "message": f"Serveur audio actif : {audio_server}",
+        "details": "PipeWire ou PulseAudio permet le partage transparent des cartes son entre plusieurs applications.",
+        "fix_command": "systemctl --user restart pipewire pipewire-pulse 2>/dev/null || pulseaudio -k && pulseaudio --start",
+    })
+
+    # Overall Status Calculation
+    if any(c["status"] == "fail" for c in checks):
+        overall_status = "error"
+    elif any(c["status"] == "warn" for c in checks):
+        overall_status = "warning"
+    else:
+        overall_status = "ok"
+
+    return {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "platform": platform.platform(),
+        "user": current_user,
+        "groups": groups,
+        "in_audio_group": in_audio_group,
+        "in_plugdev_group": in_plugdev_group,
+        "dev_snd_exists": dev_snd_exists,
+        "dev_snd_readable": dev_snd_readable,
+        "dev_snd_nodes_count": len(dev_snd_nodes),
+        "dev_bus_usb_exists": dev_bus_usb_exists,
+        "dev_bus_usb_readable": dev_bus_usb_readable,
+        "usb_devices": usb_devices,
+        "sound_cards": sound_cards,
+        "audio_server": audio_server,
+        "checks": checks,
+        "overall_status": overall_status,
+    }
+
+
 @router.get("/audio/instruments")
 def get_instruments(engine=Depends(get_engine)):
     """Report only observed hardware/software capabilities; never invent devices."""

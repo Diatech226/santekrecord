@@ -16,7 +16,8 @@ import { AudioPlayer } from './components/AudioPlayer';
 import { RecordingsHistory } from './components/RecordingsHistory';
 import { CalibrationModal } from './components/CalibrationModal';
 import { MetadataModal } from './components/MetadataModal';
-import { Power, AlertTriangle, RefreshCw, Sparkles, Globe, Activity, Gauge, Sun, Moon } from 'lucide-react';
+import { TroubleshootUsbModal } from './components/TroubleshootUsbModal';
+import { Power, AlertTriangle, RefreshCw, Sparkles, Globe, Activity, Gauge, Sun, Moon, ShieldAlert } from 'lucide-react';
 import { useLanguage } from './i18n/LanguageContext';
 import { useTheme } from './theme/ThemeContext';
 
@@ -64,6 +65,7 @@ export default function App() {
   const [selectedRecording, setSelectedRecording] = useState<RecordingMeta | null>(null);
   const [metaModalRecording, setMetaModalRecording] = useState<RecordingMeta | null>(null);
   const [isCalibModalOpen, setIsCalibModalOpen] = useState(false);
+  const [isTroubleshootModalOpen, setIsTroubleshootModalOpen] = useState(false);
 
   // Dynamic Browser Tab Title Recording Indicator (Pulsing Red)
   useEffect(() => {
@@ -239,23 +241,84 @@ export default function App() {
     }
   };
 
+  // State for manual device refresh
+  const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
+
+  const handleRefreshDevices = useCallback(async () => {
+    setIsRefreshingDevices(true);
+    try {
+      const freshDevices = await api.getAudioDevices();
+      setDevices(freshDevices);
+      if (freshDevices.length > 0) {
+        const currentFound = freshDevices.some(
+          (d) => String(d.id) === String(settings.device_id)
+        );
+        if (!currentFound) {
+          const fallback =
+            freshDevices.find((d) => d.type === 'usb' || d.is_default) ||
+            freshDevices[0];
+          void handleUpdateSettings({
+            device_id: fallback.id,
+            device_name: fallback.name,
+          });
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsRefreshingDevices(false);
+    }
+  }, [settings.device_id, handleUpdateSettings]);
+
+  // Periodic polling for hotplugged USB audio devices when not actively monitoring
+  useEffect(() => {
+    if (isMonitoring) return;
+    const timer = setInterval(() => {
+      api.getAudioDevices().then((fresh) => {
+        if (fresh.length > 0) {
+          setDevices((prev) => {
+            if (JSON.stringify(prev) !== JSON.stringify(fresh)) {
+              return fresh;
+            }
+            return prev;
+          });
+        }
+      }).catch(() => {});
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [isMonitoring]);
+
   const handleSourceChange = (source: AudioSourceType) => {
     if (source === 'gnuradio') {
       void handleUpdateSettings({ source });
       return;
     }
 
-    const compatibleDevices = devices.filter((device) => source === 'usb'
-      ? device.type === 'usb' || device.type === 'line' || device.device_kind === 'hardware'
-      : device.type === 'microphone');
-    const selectedStillVisible = compatibleDevices.find(
+    const candidateDevices = devices.filter((device) => {
+      if (source === 'usb') {
+        const nameLower = (device.name || '').toLowerCase();
+        return (
+          device.type === 'usb' ||
+          device.type === 'line' ||
+          device.device_kind === 'hardware' ||
+          nameLower.includes('usb') ||
+          nameLower.includes('codec') ||
+          nameLower.includes('sound') ||
+          nameLower.includes('audio') ||
+          nameLower.includes('dac')
+        );
+      }
+      return true;
+    });
+
+    const pool = candidateDevices.length > 0 ? candidateDevices : devices;
+    const selectedStillVisible = pool.find(
       (device) => String(device.id) === String(settings.device_id)
     );
-    const selectedDevice = selectedStillVisible ?? compatibleDevices.find((device) => device.is_default)
-      ?? compatibleDevices[0];
+    const selectedDevice = selectedStillVisible ?? pool.find((device) => device.is_default)
+      ?? pool[0];
 
-    // Persist source and device together. This avoids briefly saving a USB
-    // source with a stale microphone id (or the reverse).
+    // Persist source and device together.
     void handleUpdateSettings({
       source,
       device_id: selectedDevice?.id ?? null,
@@ -326,98 +389,112 @@ export default function App() {
               <span>{t.engine} {isMonitoring ? t.engineActive : t.engineReady}</span>
             </div>
 
-            {/* Dark / White Theme Toggle Switch */}
-            <div id="theme-switch-header" className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px]">
+            {/* Theme Toggle & Diagnostics Toolbar */}
+            <div className="flex items-center gap-2">
               <button
-                id="theme-dark-btn"
+                id="btn-troubleshoot-usb-header"
                 type="button"
-                onClick={() => setTheme('kali-dark')}
-                style={
-                  !isLight
-                    ? {
-                        backgroundColor: accentColor,
-                        color: '#0A0B0D',
-                      }
-                    : undefined
-                }
-                className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold transition-all ${
-                  !isLight
-                    ? 'shadow-sm'
-                    : 'text-[#808080] hover:text-[#E0E0E0]'
-                }`}
-                title={t.themeDark}
+                onClick={() => setIsTroubleshootModalOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] rounded bg-[#111215] hover:bg-[#1A1B1F] border border-amber-500/40 text-amber-400 hover:text-amber-300 font-bold transition-all cursor-pointer shadow-[0_0_6px_rgba(245,158,11,0.15)]"
+                title="Vérifier les permissions Linux, /dev/bus/usb/ et le matériel audio"
               >
-                <Moon className="w-3 h-3" />
-                <span className="hidden sm:inline">{t.themeDark}</span>
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Dépanner USB</span>
               </button>
-              <button
-                id="theme-light-btn"
-                type="button"
-                onClick={() => setTheme('white-terminal')}
-                style={
-                  isLight
-                    ? {
-                        backgroundColor: accentColor,
-                        color: '#FFFFFF',
-                      }
-                    : undefined
-                }
-                className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold transition-all ${
-                  isLight
-                    ? 'shadow-sm'
-                    : 'text-[#808080] hover:text-[#E0E0E0]'
-                }`}
-                title={t.themeLight}
-              >
-                <Sun className="w-3 h-3" />
-                <span className="hidden sm:inline">{t.themeLight}</span>
-              </button>
-            </div>
 
-            {/* Language Selector */}
-            <div className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px]">
-              <button
-                id="lang-en-btn"
-                type="button"
-                onClick={() => setLanguage('en')}
-                style={
-                  language === 'en'
-                    ? {
-                        backgroundColor: accentColor,
-                        color: isLight ? '#FFFFFF' : '#0A0B0D',
-                      }
-                    : undefined
-                }
-                className={`px-2 py-0.5 rounded font-bold transition-colors ${
-                  language === 'en'
-                    ? ''
-                    : 'text-[#808080] hover:text-[#E0E0E0]'
-                }`}
-                title="Switch to English"
-              >
-                EN
-              </button>
-              <button
-                id="lang-fr-btn"
-                type="button"
-                onClick={() => setLanguage('fr')}
-                style={
-                  language === 'fr'
-                    ? {
-                        backgroundColor: accentColor,
-                        color: isLight ? '#FFFFFF' : '#0A0B0D',
-                      }
-                    : undefined
-                }
-                className={`px-2 py-0.5 rounded font-bold transition-colors ${
-                  language === 'fr'
-                    ? ''
-                    : 'text-[#808080] hover:text-[#E0E0E0]'
-                }`}
-                title="Passer en Français"
-              >
-                FR
-              </button>
+              {/* Dark / White Theme Toggle Switch */}
+              <div id="theme-switch-header" className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px]">
+                <button
+                  id="theme-dark-btn"
+                  type="button"
+                  onClick={() => setTheme('kali-dark')}
+                  style={
+                    !isLight
+                      ? {
+                          backgroundColor: accentColor,
+                          color: '#0A0B0D',
+                        }
+                      : undefined
+                  }
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold transition-all ${
+                    !isLight
+                      ? 'shadow-sm'
+                      : 'text-[#808080] hover:text-[#E0E0E0]'
+                  }`}
+                  title={t.themeDark}
+                >
+                  <Moon className="w-3 h-3" />
+                  <span className="hidden sm:inline">{t.themeDark}</span>
+                </button>
+                <button
+                  id="theme-light-btn"
+                  type="button"
+                  onClick={() => setTheme('white-terminal')}
+                  style={
+                    isLight
+                      ? {
+                          backgroundColor: accentColor,
+                          color: '#FFFFFF',
+                        }
+                      : undefined
+                  }
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded font-bold transition-all ${
+                    isLight
+                      ? 'shadow-sm'
+                      : 'text-[#808080] hover:text-[#E0E0E0]'
+                  }`}
+                  title={t.themeLight}
+                >
+                  <Sun className="w-3 h-3" />
+                  <span className="hidden sm:inline">{t.themeLight}</span>
+                </button>
+              </div>
+
+              {/* Language Selector */}
+              <div className="flex items-center border border-[#2A2B2F] rounded bg-[#111215] p-0.5 text-[10px]">
+                <button
+                  id="lang-en-btn"
+                  type="button"
+                  onClick={() => setLanguage('en')}
+                  style={
+                    language === 'en'
+                      ? {
+                          backgroundColor: accentColor,
+                          color: isLight ? '#FFFFFF' : '#0A0B0D',
+                        }
+                      : undefined
+                  }
+                  className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                    language === 'en'
+                      ? ''
+                      : 'text-[#808080] hover:text-[#E0E0E0]'
+                  }`}
+                  title="Switch to English"
+                >
+                  EN
+                </button>
+                <button
+                  id="lang-fr-btn"
+                  type="button"
+                  onClick={() => setLanguage('fr')}
+                  style={
+                    language === 'fr'
+                      ? {
+                          backgroundColor: accentColor,
+                          color: isLight ? '#FFFFFF' : '#0A0B0D',
+                        }
+                      : undefined
+                  }
+                  className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                    language === 'fr'
+                      ? ''
+                      : 'text-[#808080] hover:text-[#E0E0E0]'
+                  }`}
+                  title="Passer en Français"
+                >
+                  FR
+                </button>
+              </div>
             </div>
           </div>
         </header>
@@ -454,6 +531,9 @@ export default function App() {
                 deviceId={settings.device_id}
                 devices={devices}
                 disabled={isMonitoring}
+                isRefreshing={isRefreshingDevices}
+                onRefreshDevices={handleRefreshDevices}
+                onOpenTroubleshoot={() => setIsTroubleshootModalOpen(true)}
                 onSourceChange={handleSourceChange}
                 onDeviceChange={(devId: string | number) => {
                   const dev = devices.find((d) => String(d.id) === String(devId));
@@ -818,6 +898,13 @@ export default function App() {
       <MetadataModal
         recording={metaModalRecording}
         onClose={() => setMetaModalRecording(null)}
+      />
+
+      {/* USB / Kali Linux Hardware Troubleshooting Modal */}
+      <TroubleshootUsbModal
+        isOpen={isTroubleshootModalOpen}
+        onClose={() => setIsTroubleshootModalOpen(false)}
+        onRefreshDevices={handleRefreshDevices}
       />
     </div>
   );

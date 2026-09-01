@@ -1,6 +1,6 @@
 import React from 'react';
 import { AudioDevice, AudioSourceType } from '../types';
-import { Mic, Usb, Radio } from 'lucide-react';
+import { Mic, Usb, Radio, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 
 interface Props {
@@ -8,6 +8,9 @@ interface Props {
   deviceId: string | number | null;
   devices: AudioDevice[];
   disabled?: boolean;
+  isRefreshing?: boolean;
+  onRefreshDevices?: () => void;
+  onOpenTroubleshoot?: () => void;
   onSourceChange: (source: AudioSourceType) => void;
   onDeviceChange: (deviceId: string | number) => void;
 }
@@ -17,20 +20,49 @@ export const SourceSelector: React.FC<Props> = ({
   deviceId,
   devices,
   disabled = false,
+  isRefreshing = false,
+  onRefreshDevices,
+  onOpenTroubleshoot,
   onSourceChange,
   onDeviceChange,
 }) => {
   const { t } = useLanguage();
 
-  // PortAudio/ALSA does not expose a reliable "USB" flag. Many interfaces have
-  // generic names (CODEC, Audio, capture...) and used to disappear because the
-  // backend could only classify devices whose name literally contained USB.
-  const filteredDevices = devices.filter((device) => {
+  // Robust device filtering:
+  // When 'usb' is selected, prioritize USB sound cards, Line-in, Hardware interfaces,
+  // and devices containing USB / CODEC in their name.
+  // If no strict USB match is found, fallback to all available devices so the user
+  // is NEVER blocked from selecting their connected sound card.
+  const filteredDevices = React.useMemo(() => {
     if (source === 'usb') {
-      return device.type === 'usb' || device.type === 'line' || device.device_kind === 'hardware';
+      const usbCandidates = devices.filter((device) => {
+        const nameLower = (device.name || '').toLowerCase();
+        return (
+          device.type === 'usb' ||
+          device.type === 'line' ||
+          device.device_kind === 'hardware' ||
+          nameLower.includes('usb') ||
+          nameLower.includes('codec') ||
+          nameLower.includes('sound') ||
+          nameLower.includes('audio') ||
+          nameLower.includes('dac') ||
+          nameLower.includes('card')
+        );
+      });
+      return usbCandidates.length > 0 ? usbCandidates : devices;
     }
-    return device.type === 'microphone';
-  });
+    return devices;
+  }, [devices, source]);
+
+  const getDeviceLabel = (dev: AudioDevice) => {
+    const nameLower = (dev.name || '').toLowerCase();
+    const isUsb = dev.type === 'usb' || nameLower.includes('usb') || nameLower.includes('codec');
+    const typeTag = isUsb ? 'USB' : dev.device_kind === 'virtual' ? 'VIRT' : 'HW';
+    const hostTag = dev.hostapi || 'ALSA';
+    const defaultTag = dev.is_default ? ' (défaut)' : '';
+    const chTag = dev.max_input_channels > 1 ? ` · ${dev.max_input_channels}ch` : '';
+    return `[${typeTag} · ${hostTag}${chTag}] ${dev.name}${defaultTag}`;
+  };
 
   return (
     <div id="source-selector-block" className="space-y-4 font-mono">
@@ -90,9 +122,39 @@ export const SourceSelector: React.FC<Props> = ({
       {/* Device dropdown or HackRF FIFO info */}
       {source !== 'gnuradio' ? (
         <div className="space-y-1.5">
-          <label htmlFor="device-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">
-            {t.deviceInterface}
-          </label>
+          <div className="flex items-center justify-between">
+            <label htmlFor="device-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">
+              {t.deviceInterface}
+            </label>
+            <div className="flex items-center gap-2">
+              {onOpenTroubleshoot && (
+                <button
+                  id="btn-troubleshoot-usb-source"
+                  type="button"
+                  onClick={onOpenTroubleshoot}
+                  title="Dépanner la carte son USB et vérifier les permissions Linux /dev/bus/usb/ et audio"
+                  className="flex items-center gap-1 text-[9.5px] text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                >
+                  <ShieldAlert className="w-3 h-3" />
+                  <span>{t.troubleshootUsb}</span>
+                </button>
+              )}
+              {onRefreshDevices && (
+                <button
+                  id="btn-refresh-audio-devices"
+                  type="button"
+                  disabled={disabled || isRefreshing}
+                  onClick={onRefreshDevices}
+                  title="Rafraîchir la liste des cartes son et micros connectés (re-scan)"
+                  className="flex items-center gap-1 text-[9.5px] text-[#00F0FF] hover:text-white transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin text-[#00F0FF]' : ''}`} />
+                  <span>Rafraîchir</span>
+                </button>
+              )}
+            </div>
+          </div>
+
           <select
             id="device-select"
             disabled={disabled}
@@ -105,10 +167,24 @@ export const SourceSelector: React.FC<Props> = ({
             )}
             {filteredDevices.map((dev) => (
               <option key={dev.id} value={String(dev.id)}>
-                [{dev.hostapi || 'audio'} · {dev.device_kind || 'hardware'}] {dev.name} {dev.is_default ? '(défaut)' : ''}
+                {getDeviceLabel(dev)}
               </option>
             ))}
           </select>
+
+          {source === 'usb' && onOpenTroubleshoot && (
+            <div className="flex items-center justify-between text-[10px] text-[#A0A0A0] bg-[#0E0F12] border border-[#1A1B1F] p-2 rounded">
+              <span>Carte son non visible ou muette ?</span>
+              <button
+                type="button"
+                onClick={onOpenTroubleshoot}
+                className="text-[#00F0FF] hover:underline flex items-center gap-1 cursor-pointer font-semibold"
+              >
+                <span>Diagnostic permissions Kali Linux</span>
+                <span>→</span>
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded text-xs space-y-1.5">

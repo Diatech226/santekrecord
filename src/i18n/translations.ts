@@ -203,6 +203,9 @@ export interface Translations {
   peak5sMaxFreq: string;
   highestFreqBin: string;
   peak5sHold: string;
+  peakFreqHighlight: string;
+  peakFreqHighlightDesc: string;
+  dominantPeak: string;
   reticle: string;
   harmonicMarkers: string;
   interferenceMitigation: string;
@@ -277,6 +280,36 @@ export interface Translations {
   copied: string;
   downloadMetadata: string;
   playbackSpeed: string;
+
+  // USB / Kali Hardware Troubleshooting Modal
+  troubleshootUsb: string;
+  troubleshootUsbTitle: string;
+  troubleshootUsbSub: string;
+  troubleshootStepsTitle: string;
+  troubleshootStep1Title: string;
+  troubleshootStep1Desc: string;
+  troubleshootStep2Title: string;
+  troubleshootStep2Desc: string;
+  troubleshootStep3Title: string;
+  troubleshootStep3Desc: string;
+  troubleshootStep4Title: string;
+  troubleshootStep4Desc: string;
+  troubleshootRunDiagBtn: string;
+  troubleshootRunningDiag: string;
+  troubleshootDiagSuccess: string;
+  troubleshootDiagWarning: string;
+  troubleshootDiagError: string;
+  troubleshootOverallStatus: string;
+  troubleshootUserGroups: string;
+  troubleshootDevSndStatus: string;
+  troubleshootDevBusUsbStatus: string;
+  troubleshootUsbCardsDetected: string;
+  troubleshootFixCommand: string;
+  troubleshootCopyCmd: string;
+  troubleshootCopied: string;
+  troubleshootHardwareSummary: string;
+  troubleshootTabsGuide: string;
+  troubleshootTabsLiveDiag: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -474,6 +507,9 @@ export const translations: Record<Language, Translations> = {
     peak5sMaxFreq: '5s MAX FREQ',
     highestFreqBin: 'HIGHEST BIN (5s)',
     peak5sHold: '5s Peak Hold',
+    peakFreqHighlight: 'Peak Frequency Tag',
+    peakFreqHighlightDesc: 'Highlight and label the dominant real-time frequency peak',
+    dominantPeak: 'PEAK FREQ',
     reticle: 'Crosshair Reticle',
     harmonicMarkers: 'Harmonic Guides',
     interferenceMitigation: 'Mitigation Recommendation',
@@ -545,6 +581,36 @@ export const translations: Record<Language, Translations> = {
     copied: 'Copied',
     downloadMetadata: 'Download Metadata',
     playbackSpeed: 'Speed',
+
+    // USB / Kali Hardware Troubleshooting Modal
+    troubleshootUsb: 'Troubleshoot USB',
+    troubleshootUsbTitle: 'USB Sound Card & Hardware Permissions',
+    troubleshootUsbSub: 'Step-by-step diagnostic and permission resolution for Kali Linux, /dev/bus/usb/, and ALSA audio subsystems',
+    troubleshootStepsTitle: 'Step-by-Step Resolution Guide (Kali Linux / Debian)',
+    troubleshootStep1Title: '1. System User Groups (audio & plugdev)',
+    troubleshootStep1Desc: 'On Kali Linux, non-root users must belong to the "audio" group for ALSA device access and "plugdev" for raw USB communication without root privileges.',
+    troubleshootStep2Title: '2. Device Nodes (/dev/snd and /dev/bus/usb)',
+    troubleshootStep2Desc: 'Verify read and write access on sound device nodes (/dev/snd/pcm* and /dev/snd/control*) and raw USB bus directories.',
+    troubleshootStep3Title: '3. Udev Rules & USB Hotplug Trigger',
+    troubleshootStep3Desc: 'Reload dynamic udev subsystem rules to automatically grant group permissions when plugging USB audio DACs, CODECs, or HackRF SDR devices.',
+    troubleshootStep4Title: '4. Audio Server Service Restart',
+    troubleshootStep4Desc: 'Restart PipeWire or PulseAudio background daemons to refresh the system sound hardware inventory without requiring a full OS reboot.',
+    troubleshootRunDiagBtn: 'Run Hardware Permission Diagnostic',
+    troubleshootRunningDiag: 'Probing Hardware & Linux Permissions...',
+    troubleshootDiagSuccess: 'All Hardware & Group Permissions Nominal',
+    troubleshootDiagWarning: 'Minor Permission Warnings Detected',
+    troubleshootDiagError: 'Critical Hardware Permission Errors Detected',
+    troubleshootOverallStatus: 'System Status',
+    troubleshootUserGroups: 'User Groups',
+    troubleshootDevSndStatus: 'ALSA /dev/snd',
+    troubleshootDevBusUsbStatus: 'USB /dev/bus/usb',
+    troubleshootUsbCardsDetected: 'Detected USB / Sound Hardware',
+    troubleshootFixCommand: 'Recommended Terminal Fix:',
+    troubleshootCopyCmd: 'Copy Command',
+    troubleshootCopied: 'Copied!',
+    troubleshootHardwareSummary: 'Hardware Diagnostics & Probed Nodes',
+    troubleshootTabsGuide: 'Step-by-Step Guide',
+    troubleshootTabsLiveDiag: 'Live Diagnostic Check',
   },
   fr: {
     appTitle: 'Moniteur d\'Intelligence Audio',
@@ -740,6 +806,9 @@ export const translations: Record<Language, Translations> = {
     peak5sMaxFreq: 'FRÉQ MAX 5s',
     highestFreqBin: 'BIN MAX (5s)',
     peak5sHold: 'Maintien Crête 5s',
+    peakFreqHighlight: 'Balise Fréq. Crête',
+    peakFreqHighlightDesc: 'Surligner et étiqueter la fréquence crête dominante en temps réel',
+    dominantPeak: 'FRÉQ CRÊTE',
     reticle: 'Réticule Télémesure',
     harmonicMarkers: 'Repères Harmoniques',
     interferenceMitigation: 'Recommandation d\'Atténuation',
@@ -811,5 +880,35 @@ export const translations: Record<Language, Translations> = {
     copied: 'Copié',
     downloadMetadata: 'Télécharger Métadonnées',
     playbackSpeed: 'Vitesse',
+
+    // USB / Kali Hardware Troubleshooting Modal
+    troubleshootUsb: 'Dépanner USB',
+    troubleshootUsbTitle: 'Permissions Matérielles & Carte Son USB',
+    troubleshootUsbSub: 'Guide pas-à-pas et diagnostic des permissions système pour Kali Linux, /dev/bus/usb/ et sous-système ALSA',
+    troubleshootStepsTitle: 'Guide de Résolution Pas-à-Pas (Kali Linux / Debian)',
+    troubleshootStep1Title: '1. Groupes Utilisateurs Système (audio & plugdev)',
+    troubleshootStep1Desc: 'Sur Kali Linux, les utilisateurs non-root doivent appartenir au groupe "audio" pour accéder aux périphériques ALSA et au groupe "plugdev" pour communiquer avec les interfaces USB sans les privilèges root.',
+    troubleshootStep2Title: '2. Nœuds Matériels (/dev/snd et /dev/bus/usb)',
+    troubleshootStep2Desc: 'Vérifiez les droits d\'accès en lecture/écriture sur les fichiers de périphériques son (/dev/snd/pcm* et /dev/snd/control*) et les bus USB bruts.',
+    troubleshootStep3Title: '3. Règles Udev & Détection à Chaud USB',
+    troubleshootStep3Desc: 'Rechargez les règles du sous-système udev pour attribuer automatiquement les droits de groupe lors du branchement d\'un DAC USB, CODEC ou HackRF SDR.',
+    troubleshootStep4Title: '4. Redémarrage du Serveur de Son',
+    troubleshootStep4Desc: 'Redémarrez les démons en arrière-plan PipeWire ou PulseAudio pour actualiser l\'inventaire matériel audio sans nécessiter de redémarrage complet du système.',
+    troubleshootRunDiagBtn: 'Lancer le Diagnostic Matériel',
+    troubleshootRunningDiag: 'Vérification du Matériel & des Permissions...',
+    troubleshootDiagSuccess: 'Toutes les Permissions & Périphériques sont Valides',
+    troubleshootDiagWarning: 'Avertissements Mineurs sur les Permissions Détectés',
+    troubleshootDiagError: 'Erreurs Critiques de Permissions Matérielles Détectées',
+    troubleshootOverallStatus: 'État Système',
+    troubleshootUserGroups: 'Groupes Utilisateur',
+    troubleshootDevSndStatus: 'ALSA /dev/snd',
+    troubleshootDevBusUsbStatus: 'USB /dev/bus/usb',
+    troubleshootUsbCardsDetected: 'Matériel Son & USB Détecté',
+    troubleshootFixCommand: 'Commande de Correction Recommandée :',
+    troubleshootCopyCmd: 'Copier la Commande',
+    troubleshootCopied: 'Copié !',
+    troubleshootHardwareSummary: 'Diagnostic Matériel & Nœuds Sondés',
+    troubleshootTabsGuide: 'Guide Pas-à-Pas',
+    troubleshootTabsLiveDiag: 'Diagnostic en Direct',
   },
 };
