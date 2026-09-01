@@ -239,6 +239,30 @@ export default function App() {
     }
   };
 
+  const handleSourceChange = (source: AudioSourceType) => {
+    if (source === 'gnuradio') {
+      void handleUpdateSettings({ source });
+      return;
+    }
+
+    const compatibleDevices = devices.filter((device) => source === 'usb'
+      ? device.type === 'usb' || device.type === 'line' || device.device_kind === 'hardware'
+      : device.type === 'microphone');
+    const selectedStillVisible = compatibleDevices.find(
+      (device) => String(device.id) === String(settings.device_id)
+    );
+    const selectedDevice = selectedStillVisible ?? compatibleDevices.find((device) => device.is_default)
+      ?? compatibleDevices[0];
+
+    // Persist source and device together. This avoids briefly saving a USB
+    // source with a stale microphone id (or the reverse).
+    void handleUpdateSettings({
+      source,
+      device_id: selectedDevice?.id ?? null,
+      device_name: selectedDevice?.name,
+    });
+  };
+
   const handleDeleteRecording = async (id: string) => {
     await api.deleteRecording(id);
     setRecordings((prev) => prev.filter((r) => r.recording_id !== id));
@@ -430,7 +454,7 @@ export default function App() {
                 deviceId={settings.device_id}
                 devices={devices}
                 disabled={isMonitoring}
-                onSourceChange={(src: AudioSourceType) => handleUpdateSettings({ source: src })}
+                onSourceChange={handleSourceChange}
                 onDeviceChange={(devId: string | number) => {
                   const dev = devices.find((d) => String(d.id) === String(devId));
                   handleUpdateSettings({ device_id: devId, device_name: dev?.name });
