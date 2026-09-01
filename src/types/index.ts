@@ -45,6 +45,8 @@ export interface AppSettings {
 }
 
 export interface MonitorUpdate {
+  event?: string;
+  timestamp?: number;
   level_dbfs: number;
   speech_probability: number;
   voice_detected: boolean;
@@ -52,6 +54,18 @@ export interface MonitorUpdate {
   status: EngineStatus;
   current_duration_sec?: number;
   peak_dbfs?: number;
+  rms_dbfs?: number;
+  noise_floor_dbfs?: number;
+  threshold_dbfs?: number;
+  device_connected?: boolean;
+  audio_frames_received?: boolean;
+  frames_received?: number;
+  last_audio_frame_ms?: number | null;
+  signal_state?: 'no_audio_data' | 'silence' | 'low_signal' | 'signal' | 'voice';
+  device_name?: string;
+  capture_sample_rate?: number;
+  processing_sample_rate?: number;
+  channels?: number;
   ambient_noise_dbfs?: number;
   waveform?: number[];
   spectrum?: number[];

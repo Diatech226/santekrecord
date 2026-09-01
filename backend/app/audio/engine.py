@@ -3,6 +3,7 @@ import threading
 import time
 from typing import Optional, Set, Callable, Dict, Any, List
 import numpy as np
+import collections
 
 from .base import AudioSource
 from .microphone import MicrophoneSource
@@ -40,6 +41,12 @@ class MainAudioEngine:
 
         # Metrics for monitoring
         self.current_level_dbfs = -90.0
+        self.current_peak_dbfs = -90.0
+        self.noise_floor_dbfs = -90.0
+        self.frames_received = 0
+        self.last_audio_frame_at: Optional[float] = None
+        self.started_at: Optional[float] = None
+        self._noise_levels = collections.deque(maxlen=240)
         self.current_speech_prob = 0.0
         self.current_voice_detected = False
         self.current_status = "idle"
@@ -106,6 +113,9 @@ class MainAudioEngine:
             return False
 
         self._is_running = True
+        self.started_at = time.time()
+        self.frames_received = 0
+        self.last_audio_frame_at = None
         self.current_status = "listening"
         self._thread = threading.Thread(target=self._audio_loop, daemon=True)
         self._thread.start()
@@ -141,12 +151,22 @@ class MainAudioEngine:
             try:
                 chunk = self.source.read_chunk(chunk_size=1024)
                 if chunk is None or len(chunk) == 0:
+                    now = time.time()
+                    if now - last_broadcast_time >= 0.12:
+                        self._broadcast(self.get_telemetry())
+                        last_broadcast_time = now
                     time.sleep(0.01)
                     continue
 
                 # 1. Compute RMS & dBFS
-                _, dbfs = self.rms_detector.process_chunk(chunk)
+                rms, dbfs = self.rms_detector.process_chunk(chunk)
                 self.current_level_dbfs = round(dbfs, 1)
+                peak = float(np.max(np.abs(chunk))) if len(chunk) else 0.0
+                self.current_peak_dbfs = round(self.rms_detector.rms_to_dbfs(peak), 1)
+                self.frames_received += len(chunk)
+                self.last_audio_frame_at = time.time()
+                self._noise_levels.append(dbfs)
+                self.noise_floor_dbfs = round(float(np.percentile(self._noise_levels, 20)), 1)
 
                 # Calibration accumulation
                 if self._is_calibrating:
@@ -176,13 +196,41 @@ class MainAudioEngine:
                 time.sleep(0.1)
 
     def get_telemetry(self) -> Dict[str, Any]:
+        now = time.time()
+        source = self.source
+        last_frame_ms = None if self.last_audio_frame_at is None else round((now - self.last_audio_frame_at) * 1000)
+        receiving = last_frame_ms is not None and last_frame_ms < 1000
+        if self._is_running and not receiving and self.started_at and now - self.started_at > 1.0:
+            signal_state = "no_audio_data"
+        elif self.current_level_dbfs <= -85:
+            signal_state = "silence"
+        elif self.current_level_dbfs < self.config.threshold_dbfs:
+            signal_state = "low_signal"
+        elif self.current_voice_detected:
+            signal_state = "voice"
+        else:
+            signal_state = "signal"
         return {
+            "timestamp": now,
             "level_dbfs": self.current_level_dbfs,
+            "rms_dbfs": self.current_level_dbfs,
+            "peak_dbfs": self.current_peak_dbfs,
+            "noise_floor_dbfs": self.noise_floor_dbfs,
+            "threshold_dbfs": self.config.threshold_dbfs,
             "speech_probability": self.current_speech_prob,
             "voice_detected": self.current_voice_detected,
             "recording": self.recorder.is_recording,
             "status": self.current_status,
             "error_message": self.current_error,
+            "device_connected": bool(self._is_running and source and source.is_active),
+            "audio_frames_received": receiving,
+            "frames_received": self.frames_received,
+            "last_audio_frame_ms": last_frame_ms,
+            "signal_state": signal_state,
+            "device_name": getattr(source, "device_name", self.config.device_name),
+            "capture_sample_rate": getattr(source, "capture_sample_rate", self.config.sample_rate),
+            "processing_sample_rate": self.config.sample_rate,
+            "channels": 1,
         }
 
     def calibrate_noise_floor(self, duration_sec: float = 5.0) -> Dict[str, Any]:

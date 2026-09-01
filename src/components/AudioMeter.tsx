@@ -45,8 +45,8 @@ export const AudioMeter: React.FC<Props> = ({
   // Spectral display mode: FFT Spectrum Analyzer, Waterfall Spectrogram, or Combined
   const [spectralViewMode, setSpectralViewMode] = useState<'spectrum' | 'heatmap' | 'combined'>('spectrum');
 
-  // Range from -70 dBFS to 0 dBFS
-  const minDbfs = -70;
+  // Full diagnostic range: even very quiet hardware remains visible.
+  const minDbfs = -100;
   const maxDbfs = 0;
   const clampedDbfs = Math.max(minDbfs, Math.min(maxDbfs, isMonitoring ? levelDbfs : -70));
 
@@ -88,10 +88,10 @@ export const AudioMeter: React.FC<Props> = ({
   const isAboveThreshold = isMonitoring && levelDbfs >= thresholdDbfs;
   const isVadActive = isMonitoring && speechProb >= vadThreshold;
 
-  // 5-second rolling time-series buffer
+  // 10-second rolling dBFS history, fed by the backend WebSocket telemetry.
   const [history, setHistory] = useState<SignalPoint[]>(() => {
     const now = Date.now();
-    // Initialize with 5 seconds of baseline data
+    // Keep a visible baseline before the first hardware frame arrives.
     const initial: SignalPoint[] = [];
     for (let i = 50; i >= 0; i--) {
       initial.push({ time: now - i * 100, dbfs: -70 });
@@ -122,11 +122,11 @@ export const AudioMeter: React.FC<Props> = ({
       const currentLevel = latestLevelRef.current;
 
       setHistory((prev) => {
-        const windowStart = now - 5000;
+        const windowStart = now - 10000;
         const filtered = prev.filter((p) => p.time >= windowStart);
         return [...filtered, { time: now, dbfs: currentLevel }];
       });
-    }, 50); // 20 FPS high fidelity time-series sampling
+    }, 125); // 8 Hz: responsive without transmitting/rendering raw waveforms
 
     return () => clearInterval(interval);
   }, []);
@@ -141,7 +141,7 @@ export const AudioMeter: React.FC<Props> = ({
   // D3 Scales & Generators
   const now = history.length > 0 ? history[history.length - 1].time : Date.now();
   const xScale = d3.scaleLinear()
-    .domain([now - 5000, now])
+    .domain([now - 10000, now])
     .range([0, innerWidth]);
 
   const yScale = d3.scaleLinear()
@@ -175,8 +175,8 @@ export const AudioMeter: React.FC<Props> = ({
     { db: 0,   label: '0dB',   percent: 100 },
   ];
 
-  const yTicks = [0, -20, -40, -60];
-  const timeTicks = [5, 4, 3, 2, 1, 0];
+  const yTicks = [0, -20, -40, -60, -80, -100];
+  const timeTicks = [10, 8, 6, 4, 2, 0];
 
   // Ambient Noise Floor Sparkline Calculations
   const sparkWidth = 560;
@@ -1128,4 +1128,3 @@ export const AudioMeter: React.FC<Props> = ({
     </div>
   );
 };
-
