@@ -1,6 +1,9 @@
 import { AppSettings, AudioDevice, CalibrationState, RecordingMeta } from '../types';
 
-const API_BASE = '/api';
+const backendOrigin = typeof window === 'undefined'
+  ? 'http://127.0.0.1:8000'
+  : `${window.location.protocol}//${window.location.hostname}:8000`;
+const API_BASE = `${backendOrigin}/api`;
 
 export const api = {
   async getHealth(): Promise<{ status: string; engine: string; timestamp: string }> {
@@ -23,59 +26,7 @@ export const api = {
       // fallback
     }
 
-    // Browser audio devices enumeration fallback
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices
-          .filter((d) => d.kind === 'audioinput')
-          .map((d, index) => {
-            const isUsb = d.label.toLowerCase().includes('usb') || d.label.toLowerCase().includes('external');
-            const isLine = d.label.toLowerCase().includes('line');
-            return {
-              id: d.deviceId || `device-${index}`,
-              name: d.label || `Audio Input ${index + 1}`,
-              max_input_channels: 1,
-              default_samplerate: 16000,
-              is_default: index === 0,
-              type: isUsb ? ('usb' as const) : isLine ? ('line' as const) : ('microphone' as const),
-            };
-          });
-
-        if (audioInputs.length > 0) {
-          return audioInputs;
-        }
-      } catch {
-        // permission denied or unsupported
-      }
-    }
-
-    return [
-      {
-        id: 'default-mic',
-        name: 'Default System Microphone (sounddevice 0)',
-        max_input_channels: 1,
-        default_samplerate: 16000,
-        is_default: true,
-        type: 'microphone',
-      },
-      {
-        id: 'usb-soundcard',
-        name: 'USB Audio Device Line-In (sounddevice 1)',
-        max_input_channels: 2,
-        default_samplerate: 16000,
-        is_default: false,
-        type: 'usb',
-      },
-      {
-        id: 'gnuradio-fifo',
-        name: 'GNU Radio FIFO (/tmp/hackrf_audio.f32)',
-        max_input_channels: 1,
-        default_samplerate: 16000,
-        is_default: false,
-        type: 'other',
-      },
-    ];
+    return [];
   },
 
   async getSettings(): Promise<AppSettings> {
@@ -149,102 +100,12 @@ export const api = {
     }
   },
 
-  async testInput(deviceId: number | string | null): Promise<{ working: boolean; message: string; level_dbfs: number; peak_dbfs: number; frames_received: number; capture_sample_rate?: number }> {
-    // 1. Try real browser hardware microphone capture if available
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-      try {
-        const audioConstraint: MediaTrackConstraints = {};
-        if (deviceId && typeof deviceId === 'string' && !['default-mic', 'usb-soundcard', 'gnuradio-fifo'].includes(deviceId)) {
-          audioConstraint.deviceId = { exact: deviceId };
-        }
-        audioConstraint.echoCancellation = false;
-        audioConstraint.noiseSuppression = false;
-        audioConstraint.autoGainControl = false;
-
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: Object.keys(audioConstraint).length > 0 ? audioConstraint : true });
-        
-        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        const audioCtx = new AudioCtx();
-        const source = audioCtx.createMediaStreamSource(stream);
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 2048;
-        source.connect(analyser);
-
-        const dataArray = new Float32Array(analyser.fftSize);
-        const startTime = Date.now();
-        const levels: number[] = [];
-        let maxPeak = -100;
-        let totalFrames = 0;
-
-        await new Promise<void>((resolve) => {
-          const checkInterval = setInterval(() => {
-            analyser.getFloatTimeDomainData(dataArray);
-            totalFrames += dataArray.length;
-
-            let sum = 0;
-            let chunkPeak = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-              const val = dataArray[i];
-              const absVal = Math.abs(val);
-              if (absVal > chunkPeak) chunkPeak = absVal;
-              sum += val * val;
-            }
-
-            const rms = Math.sqrt(sum / dataArray.length);
-            const levelDbfs = 20 * Math.log10(Math.max(rms, 1e-5));
-            const peakDbfs = 20 * Math.log10(Math.max(chunkPeak, 1e-5));
-
-            levels.push(levelDbfs);
-            if (peakDbfs > maxPeak) maxPeak = peakDbfs;
-
-            if (Date.now() - startTime >= 2500) {
-              clearInterval(checkInterval);
-              resolve();
-            }
-          }, 60);
-        });
-
-        // Clean up audio nodes & media stream
-        stream.getTracks().forEach((t) => t.stop());
-        await audioCtx.close().catch(() => {});
-
-        const validLevels = levels.filter((l) => isFinite(l) && l > -100);
-        const avgLevel = validLevels.length > 0
-          ? validLevels.reduce((a, b) => a + b, 0) / validLevels.length
-          : -70;
-
-        return {
-          working: totalFrames > 0,
-          message: totalFrames > 0 ? 'Microphone verified & active' : 'No audio frames received',
-          level_dbfs: Math.round(avgLevel * 10) / 10,
-          peak_dbfs: Math.round(maxPeak * 10) / 10,
-          frames_received: totalFrames,
-          capture_sample_rate: audioCtx.sampleRate,
-        };
-      } catch (mediaErr) {
-        console.warn('Browser getUserMedia test failed, falling back to server test:', mediaErr);
-      }
-    }
-
-    // 2. Fallback to server endpoint
-    try {
-      const query = deviceId === null ? '' : `?device_id=${encodeURIComponent(String(deviceId))}`;
-      const res = await fetch(`${API_BASE}/audio/test${query}`, { method: 'POST' });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // ignore
-    }
-
-    return {
-      working: true,
-      message: 'Audio input hardware ready',
-      level_dbfs: -45.0,
-      peak_dbfs: -30.0,
-      frames_received: 48000,
-      capture_sample_rate: 16000,
-    };
+  async testInput(deviceId: number | string | null, source = 'microphone'): Promise<{ working: boolean; message: string; level_dbfs: number; peak_dbfs: number; frames_received: number; capture_sample_rate?: number }> {
+    const params = new URLSearchParams({ source_type: source });
+    if (deviceId !== null) params.set('device_id', String(deviceId));
+    const res = await fetch(`${API_BASE}/audio/test?${params}`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    return await res.json();
   },
 
   async calibrateNoise(): Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number }> {
@@ -271,7 +132,11 @@ export const api = {
     try {
       const res = await fetch(`${API_BASE}/recordings`);
       if (res.ok) {
-        return await res.json();
+        const recordings = await res.json() as RecordingMeta[];
+        return recordings.map((recording) => ({
+          ...recording,
+          audio_url: recording.audio_url?.startsWith('/') ? `${backendOrigin}${recording.audio_url}` : recording.audio_url,
+        }));
       }
     } catch {
       // fallback

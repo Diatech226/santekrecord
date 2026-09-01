@@ -168,6 +168,7 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 
 - `GET /api/health` : État de santé du système et moteur audio
 - `GET /api/audio/devices` : Liste des interfaces audio ALSA / Pulse / USB
+- `GET /api/audio/instruments` : présence réellement sondée des entrées, de GNU Radio, du FIFO et du HackRF
 - `GET /api/settings` : Récupère la configuration actuelle
 - `PUT /api/settings` : Sauvegarde la configuration dans `config.json`
 - `POST /api/monitor/start` : Démarre la surveillance audio continue
@@ -178,3 +179,8 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 - `GET /api/recordings/{id}/audio` : Fichier audio WAV streamable
 - `DELETE /api/recordings/{id}` : Suppression d'un enregistrement (WAV + JSON)
 - `WebSocket /ws/monitor` : Flux de télémétrie temps réel (~8 Hz)
+
+> **Présence matérielle réelle :** l'interface ne fabrique plus de microphone ou de
+> carte USB de démonstration. Une liste vide signifie que PortAudio/ALSA ne voit
+> aucune entrée. Pour GNU Radio, « connecté » n'est affiché qu'après réception
+> effective d'échantillons dans le FIFO ; la seule existence du tube ne suffit pas.

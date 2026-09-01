@@ -7,7 +7,9 @@ from .base import AudioSource
 
 try:
     import sounddevice as sd
-except ImportError:
+except (ImportError, OSError):
+    # sounddevice may be installed while the native PortAudio library is not.
+    # Keep the API alive so it can report zero inputs and a useful start error.
     sd = None
 
 

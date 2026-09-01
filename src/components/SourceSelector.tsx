@@ -22,16 +22,9 @@ export const SourceSelector: React.FC<Props> = ({
 }) => {
   const { t } = useLanguage();
 
-  const filteredDevices = devices.length > 0 ? devices : [
-    {
-      id: 'default-mic',
-      name: t.defaultAudioDevice || 'Default System Microphone',
-      max_input_channels: 1,
-      default_samplerate: 16000,
-      is_default: true,
-      type: 'microphone' as const,
-    },
-  ];
+  const filteredDevices = devices.filter((device) =>
+    source === 'usb' ? device.type === 'usb' || device.type === 'line' : device.type === 'microphone'
+  );
 
   return (
     <div id="source-selector-block" className="space-y-4 font-mono">
@@ -97,16 +90,16 @@ export const SourceSelector: React.FC<Props> = ({
           <select
             id="device-select"
             disabled={disabled}
-            value={deviceId ? String(deviceId) : ''}
+            value={deviceId !== null && deviceId !== undefined ? String(deviceId) : ''}
             onChange={(e) => onDeviceChange(e.target.value)}
             className="w-full text-xs bg-[#151619] border border-[#2A2B2F] text-[#E0E0E0] rounded p-2 focus:outline-none focus:border-[#00F0FF] cursor-pointer disabled:opacity-50"
           >
             {filteredDevices.length === 0 && (
-              <option value="default-mic">{t.defaultAudioDevice}</option>
+              <option value="">Aucune entrée détectée par ALSA/PipeWire</option>
             )}
             {filteredDevices.map((dev) => (
               <option key={dev.id} value={String(dev.id)}>
-                hw:{dev.id} [{dev.name}] {dev.is_default ? '(Active)' : ''}
+                [{dev.hostapi || 'audio'}] {dev.name} {dev.is_default ? '(défaut)' : ''}
               </option>
             ))}
           </select>

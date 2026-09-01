@@ -222,7 +222,12 @@ class MainAudioEngine:
             "recording": self.recorder.is_recording,
             "status": self.current_status,
             "error_message": self.current_error,
-            "device_connected": bool(self._is_running and source and source.is_active),
+            # Opening a FIFO succeeds even when GNU Radio has no writer.  For that
+            # source, real received frames are the only honest connectivity signal.
+            "device_connected": bool(
+                self._is_running and source and source.is_active
+                and (self.config.source != "gnuradio" or receiving)
+            ),
             "audio_frames_received": receiving,
             "frames_received": self.frames_received,
             "last_audio_frame_ms": last_frame_ms,
