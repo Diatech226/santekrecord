@@ -4,6 +4,7 @@ const backendOrigin = typeof window === 'undefined'
   ? 'http://127.0.0.1:8000'
   : `${window.location.protocol}//${window.location.hostname}:8000`;
 const API_BASE = `${backendOrigin}/api`;
+const INPUT_TEST_TIMEOUT_MS = 8_000;
 
 export const api = {
   async getHealth(): Promise<{ status: string; engine: string; timestamp: string }> {
@@ -103,9 +104,24 @@ export const api = {
   async testInput(deviceId: number | string | null, source = 'microphone'): Promise<{ working: boolean; message: string; level_dbfs: number; peak_dbfs: number; frames_received: number; capture_sample_rate?: number }> {
     const params = new URLSearchParams({ source_type: source });
     if (deviceId !== null) params.set('device_id', String(deviceId));
-    const res = await fetch(`${API_BASE}/audio/test?${params}`, { method: 'POST' });
-    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
-    return await res.json();
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), INPUT_TEST_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(`${API_BASE}/audio/test?${params}`, {
+        method: 'POST',
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+      return await res.json();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error('Input test timed out. Check the device and try again.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   },
 
   async calibrateNoise(): Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number }> {
