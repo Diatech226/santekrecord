@@ -1,6 +1,6 @@
-# Auto Voice Recorder (Kali Linux)
+# Auto Voice Recorder (Linux)
 
-Application desktop/web locale minimaliste et professionnelle pour **Kali Linux** permettant d'automatiser l'enregistrement audio selon la détection d'activité vocale (VAD) et de niveau sonore (dBFS).
+Application web locale minimaliste et professionnelle pour **Linux** permettant d'automatiser l'enregistrement audio selon la détection d'activité vocale (VAD) et de niveau sonore (dBFS).
 
 ---
 
@@ -28,7 +28,7 @@ Application desktop/web locale minimaliste et professionnelle pour **Kali Linux*
 ## 🏗️ Architecture du Projet
 
 ```
-auto-voice-recorder/
+santekrecord/
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
@@ -65,53 +65,152 @@ auto-voice-recorder/
 
 ---
 
-## 🚀 Installation & Lancement sur Kali Linux
+## 🚀 Installation et lancement sous Linux
 
-### 1. Prérequis système Kali
+### Prérequis
 
-Installez les dépendances audio et système :
+Le projet nécessite :
+
+- **Python 3.10 ou plus récent**, avec `venv` et `pip` ;
+- **Node.js 18 ou plus récent** et npm ;
+- PortAudio et ses en-têtes de développement pour l'accès aux entrées audio ;
+- `ffmpeg` ;
+- un serveur audio Linux (ALSA, PulseAudio ou PipeWire) correctement configuré.
+
+Vérifiez les versions installées :
+
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip portaudio19-dev ffmpeg nodejs npm gnuradio hackrf
+python3 --version
+node --version
+npm --version
 ```
 
-### 2. Démarrage rapide (Script automatique)
+Installez les paquets système correspondant à votre distribution :
 
-Exécutez simplement :
+#### Debian, Ubuntu et Kali Linux
+
 ```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip \
+  portaudio19-dev libportaudio2 alsa-utils ffmpeg nodejs npm git curl
+```
+
+#### Fedora
+
+```bash
+sudo dnf install -y python3 python3-pip portaudio-devel alsa-utils ffmpeg nodejs npm git curl
+```
+
+> Sur Fedora, `ffmpeg` peut nécessiter l'activation préalable du dépôt RPM Fusion.
+
+#### Arch Linux et Manjaro
+
+```bash
+sudo pacman -S --needed python python-pip portaudio alsa-utils ffmpeg nodejs npm git curl
+```
+
+GNU Radio et HackRF ne sont nécessaires que pour utiliser une source radio. Installez-les avec le gestionnaire de paquets de votre distribution (`gnuradio` et `hackrf`).
+
+### Option 1 — Démarrage automatique sur Debian, Ubuntu ou Kali
+
+Depuis la racine du dépôt :
+
+```bash
+git clone <URL_DU_DEPOT>
+cd santekrecord
 chmod +x start_kali.sh
 ./start_kali.sh
 ```
 
-Ce script configure l'environnement virtuel Python, installe les dépendances, prépare le tube nommé FIFO pour GNU Radio et démarre simultanément l'interface web (port 3000) et le backend (port 8000).
+Le script utilise `apt` et `dpkg` : il est donc réservé aux distributions basées sur Debian. Il installe les paquets manquants, crée `.venv`, installe les dépendances Python et Node.js, prépare le FIFO GNU Radio, puis lance les deux services.
 
----
+Quand le message de confirmation apparaît, ouvrez **http://127.0.0.1:3000**. L'API FastAPI est disponible sur **http://127.0.0.1:8000**. Utilisez `Ctrl+C` dans le terminal pour arrêter les deux services.
 
-### 3. Démarrage manuel (Pas à pas)
+### Option 2 — Démarrage manuel sur toute distribution Linux
 
-#### A. Backend Python FastAPI
+Cette méthode est recommandée sur Fedora, Arch Linux, Manjaro et les autres distributions non basées sur Debian.
+
+#### 1. Récupérer le projet
 
 ```bash
-# Créer et activer le venv
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Installer les dépendances
-pip install -r backend/requirements.txt
-
-# Lancer FastAPI
-uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
+git clone <URL_DU_DEPOT>
+cd santekrecord
 ```
 
-#### B. Frontend React / Vite
+Si le dépôt est déjà présent, placez-vous simplement dans sa racine avant d'exécuter les commandes suivantes.
 
-Dans un autre terminal :
+#### 2. Préparer le backend Python
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements.txt
+```
+
+Lancez ensuite le backend :
+
+```bash
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+```
+
+Conservez ce terminal ouvert. Pour le développement, ajoutez l'option `--reload`.
+
+#### 3. Préparer et lancer l'interface
+
+Dans un **deuxième terminal**, à la racine du dépôt :
+
 ```bash
 npm install
 npm run dev
 ```
 
-Accédez à l'application dans votre navigateur : **`http://localhost:3000`**
+Ouvrez ensuite **http://127.0.0.1:3000** dans votre navigateur. Le serveur Node écoute par défaut sur toutes les interfaces ; l'interface contacte le backend sur le port `8000` de la même machine.
+
+### Lancement après la première installation
+
+Il n'est pas nécessaire de réinstaller les dépendances à chaque démarrage. Lancez le backend dans un premier terminal :
+
+```bash
+cd santekrecord
+source .venv/bin/activate
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+```
+
+Puis l'interface dans un second terminal :
+
+```bash
+cd santekrecord
+npm run dev
+```
+
+### Build de production
+
+Pour compiler puis exécuter l'interface sans le serveur de développement Vite :
+
+```bash
+npm run build
+NODE_ENV=production npm start
+```
+
+Le backend Python doit toujours être lancé séparément sur le port `8000`.
+
+### Vérification et dépannage audio
+
+Listez les périphériques vus par ALSA :
+
+```bash
+arecord -l
+```
+
+Si la liste est vide, vérifiez que le microphone est branché, que votre utilisateur a accès au périphérique audio et que PipeWire/PulseAudio fonctionne. Vous pouvez aussi vérifier directement la détection par le backend :
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/audio/devices
+```
+
+Pour accéder à l'application depuis une autre machine du réseau, ouvrez les ports TCP `3000` et `8000` dans le pare-feu, puis utilisez `http://ADRESSE_IP_DU_SERVEUR:3000`. N'exposez pas directement le serveur de développement sur Internet ; placez un reverse proxy avec HTTPS et une authentification devant l'application.
 
 ---
 
