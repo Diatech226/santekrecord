@@ -1,6 +1,10 @@
 import { AppSettings, AudioDevice, CalibrationState, RecordingMeta } from '../types';
 
-const API_BASE = '/api';
+// The bundled Express server serves the UI on :3000 while the real
+// sounddevice engine runs in FastAPI on :8000 (see start_kali.sh).
+const API_BASE = typeof window !== 'undefined'
+  ? `${window.location.protocol}//${window.location.hostname}:8000/api`
+  : '/api';
 
 export const api = {
   async getHealth(): Promise<{ status: string; engine: string; timestamp: string }> {
@@ -141,13 +145,24 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: settings ? JSON.stringify(settings) : undefined,
       });
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {
-      // client-side audio engine handling
+      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+      return await res.json();
+    } catch (error) {
+      throw error instanceof Error ? error : new Error('Unable to start audio backend');
     }
-    return { success: true, message: 'Monitoring started' };
+  },
+
+  async testInput(deviceId: number | string | null) {
+    const query = deviceId === null ? '' : `?device_id=${encodeURIComponent(String(deviceId))}`;
+    const res = await fetch(`${API_BASE}/audio/test${query}`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    return await res.json() as { working: boolean; message: string; level_dbfs: number; peak_dbfs: number; frames_received: number };
+  },
+
+  async calibrateNoise(): Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number }> {
+    const res = await fetch(`${API_BASE}/calibrate`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    return await res.json();
   },
 
   async stopMonitoring(): Promise<{ success: boolean; message: string }> {

@@ -1,11 +1,14 @@
 import os
 import json
+import time
+import numpy as np
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import FileResponse
 
 from ..config.settings import AppConfig, load_config, save_config
 from ..audio.microphone import MicrophoneSource
+from ..detection.rms import RMSDetector
 from ..recording.metadata import RecordingMetadata
 
 router = APIRouter(prefix="/api")
@@ -88,6 +91,40 @@ def start_monitoring(settings_override: Optional[AppConfig] = None, engine=Depen
 def stop_monitoring(engine=Depends(get_engine)):
     engine.stop()
     return {"success": True, "message": "Monitoring stopped"}
+
+
+@router.post("/audio/test")
+def test_input(device_id: Optional[int | str] = None, engine=Depends(get_engine)):
+    """Open the selected hardware independently and report real samples for 3 seconds."""
+    if engine._is_running:
+        telemetry = engine.get_telemetry()
+        return {"working": telemetry["audio_frames_received"], **telemetry}
+    source = MicrophoneSource(device_id=device_id, sample_rate=engine.config.sample_rate)
+    levels, peaks, frames = [], [], 0
+    try:
+        source.start()
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            chunk = source.read_chunk()
+            if chunk is None or not len(chunk):
+                continue
+            frames += len(chunk)
+            _, level = RMSDetector.process_chunk(chunk)
+            peak = RMSDetector.rms_to_dbfs(float(np.max(np.abs(chunk))))
+            levels.append(level)
+            peaks.append(peak)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Unable to open device: {exc}")
+    finally:
+        source.stop()
+    return {
+        "working": frames > 0,
+        "message": "Input working" if frames > 0 else "No audio data",
+        "level_dbfs": round(levels[-1], 1) if levels else -100.0,
+        "peak_dbfs": round(max(peaks), 1) if peaks else -100.0,
+        "frames_received": frames,
+        "capture_sample_rate": source.capture_sample_rate,
+    }
 
 
 @router.post("/calibrate")

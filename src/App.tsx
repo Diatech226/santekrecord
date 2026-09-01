@@ -50,6 +50,10 @@ export default function App() {
   const [speechProb, setSpeechProb] = useState(0);
   const [voiceDetected, setVoiceDetected] = useState(false);
   const [ambientNoiseDbfs, setAmbientNoiseDbfs] = useState<number>(-60);
+  const [peakDbfs, setPeakDbfs] = useState(-90);
+  const [telemetry, setTelemetry] = useState<MonitorUpdate | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [isTestingInput, setIsTestingInput] = useState(false);
   const [liveWaveform, setLiveWaveform] = useState<number[]>(() => new Array(128).fill(0));
   const [spectrum, setSpectrum] = useState<number[]>(() => new Array(32).fill(0));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -88,6 +92,26 @@ export default function App() {
   // Audio Engine Ref
   const engineRef = useRef<AudioProcessorEngine | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const connectMonitorSocket = useCallback(() => {
+    wsRef.current?.close();
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${protocol}//${window.location.hostname}:8000/ws/monitor`);
+    socket.onmessage = (event) => {
+      const update = JSON.parse(event.data) as MonitorUpdate;
+      if (update.event === 'recording_saved') return;
+      setTelemetry(update);
+      setLevelDbfs(update.level_dbfs ?? -100);
+      setPeakDbfs(update.peak_dbfs ?? update.level_dbfs ?? -100);
+      setAmbientNoiseDbfs(update.noise_floor_dbfs ?? -100);
+      setSpeechProb(update.speech_probability ?? 0);
+      setVoiceDetected(Boolean(update.voice_detected));
+      setStatus(update.status ?? 'listening');
+      setErrorMessage(update.error_message || null);
+    };
+    socket.onerror = () => setErrorMessage('Monitoring WebSocket disconnected');
+    wsRef.current = socket;
+  }, []);
 
   // Uptime ticker
   useEffect(() => {
@@ -172,61 +196,44 @@ export default function App() {
       setSpectrum(new Array(32).fill(0));
     } else {
       // Start
-      const engine = new AudioProcessorEngine(settings);
-      engineRef.current = engine;
-
-      engine.setCallbacks(
-        (update: MonitorUpdate) => {
-          setLevelDbfs(update.level_dbfs);
-          setSpeechProb(update.speech_probability);
-          setVoiceDetected(update.voice_detected);
-          setStatus(update.status);
-          if (update.ambient_noise_dbfs !== undefined) {
-            setAmbientNoiseDbfs(update.ambient_noise_dbfs);
-          }
-          if (update.waveform) {
-            setLiveWaveform(update.waveform);
-          }
-          if (update.spectrum) {
-            setSpectrum(update.spectrum);
-          }
-          if (update.current_duration_sec !== undefined) {
-            setDurationSec(update.current_duration_sec);
-          }
-        },
-        handleRecordingComplete,
-        (err) => {
-          setErrorMessage(err);
-          setStatus('error');
-          setIsMonitoring(false);
-        }
-      );
-
-      const ok = await engine.start();
-      if (ok) {
+      try {
+        await api.startMonitoring(settings);
+        connectMonitorSocket();
         // Refresh available audio device list now that microphone permission was granted
         api.getAudioDevices().then((devs) => setDevices(devs)).catch(() => {});
-        await api.startMonitoring(settings);
         setIsMonitoring(true);
         setStatus('listening');
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : 'Unable to start monitoring');
+        setStatus('error');
       }
     }
   };
 
   // Run calibration
   const runCalibration = async () => {
-    if (!engineRef.current || !isMonitoring) {
-      const tempEngine = new AudioProcessorEngine(settings);
-      await tempEngine.start();
-      const res = await tempEngine.runCalibration(5);
-      tempEngine.stop();
-      return res;
-    }
-    return await engineRef.current.runCalibration(5);
+    const result = await api.calibrateNoise();
+    localStorage.setItem(`audio_calibration:${settings.device_id ?? settings.device_name}`, JSON.stringify(result));
+    return result;
   };
 
   const applyCalibrationThreshold = (recommended: number) => {
     handleUpdateSettings({ threshold_dbfs: recommended });
+  };
+
+  const testInput = async () => {
+    setIsTestingInput(true);
+    setTestResult(null);
+    try {
+      const result = await api.testInput(settings.device_id);
+      setTestResult(result.working
+        ? `Input working · Level ${result.level_dbfs.toFixed(1)} dBFS · Peak ${result.peak_dbfs.toFixed(1)} dBFS`
+        : 'No audio data received');
+    } catch (error) {
+      setTestResult(error instanceof Error ? error.message : 'Unable to open device');
+    } finally {
+      setIsTestingInput(false);
+    }
   };
 
   const handleDeleteRecording = async (id: string) => {
@@ -426,6 +433,15 @@ export default function App() {
                   handleUpdateSettings({ device_id: devId, device_name: dev?.name });
                 }}
               />
+              {settings.source !== 'gnuradio' && (
+                <div className="mt-3 space-y-2">
+                  <button type="button" onClick={testInput} disabled={isTestingInput || isMonitoring}
+                    className="w-full py-2 border border-[#2A2B2F] rounded text-[10px] uppercase text-[#00F0FF] disabled:opacity-50">
+                    {isTestingInput ? 'Testing input (3s)…' : 'Test Input'}
+                  </button>
+                  {testResult && <p className="text-[10px] text-[#A0A0A0]" role="status">{testResult}</p>}
+                </div>
+              )}
             </div>
 
             {/* Detection Parameters Panel */}
@@ -549,6 +565,36 @@ export default function App() {
                 liveWaveform={liveWaveform}
                 spectrum={spectrum}
               />
+
+              {isMonitoring && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]" aria-label="Permanent audio levels">
+                  {[
+                    ['Current / RMS', `${levelDbfs.toFixed(1)} dBFS`],
+                    ['Peak', `${peakDbfs.toFixed(1)} dBFS`],
+                    ['Noise floor', `${ambientNoiseDbfs.toFixed(1)} dBFS`],
+                    ['Trigger', `${settings.threshold_dbfs.toFixed(1)} dBFS`],
+                  ].map(([label, value]) => (
+                    <div key={label} className="p-2 bg-[#0A0B0D] border border-[#1A1B1F] rounded">
+                      <div className="text-[#606060] uppercase">{label}</div><div className="text-[#E0E0E0] mt-1">{value}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {isMonitoring && (
+                <details className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded text-[10px]">
+                  <summary className="cursor-pointer uppercase text-[#A0A0A0]">Diagnostics / Advanced</summary>
+                  <div className="grid grid-cols-2 gap-2 mt-3 text-[#707070]">
+                    <span>Device</span><span className="text-[#D0D0D0]">{telemetry?.device_name ?? settings.device_name ?? 'Default input'}</span>
+                    <span>Backend state</span><span className="text-[#D0D0D0]">{telemetry?.device_connected ? 'Connected' : 'No audio input'}</span>
+                    <span>Signal state</span><span className="text-[#D0D0D0] uppercase">{telemetry?.signal_state?.replaceAll('_', ' ') ?? 'Starting'}</span>
+                    <span>Capture / processing</span><span className="text-[#D0D0D0]">{telemetry?.capture_sample_rate ?? '—'} / {telemetry?.processing_sample_rate ?? 16000} Hz</span>
+                    <span>Channels</span><span className="text-[#D0D0D0]">{telemetry?.channels ?? 1}</span>
+                    <span>Frames received</span><span className="text-[#D0D0D0]">{telemetry?.frames_received?.toLocaleString() ?? 0}</span>
+                    <span>Last audio frame</span><span className="text-[#D0D0D0]">{telemetry?.last_audio_frame_ms == null ? 'Never' : `${telemetry.last_audio_frame_ms} ms ago`}</span>
+                  </div>
+                </details>
+              )}
 
               {/* 4-Stat Telemetry Hardware Block including Dedicated Signal-to-Noise Ratio (SNR) */}
               {(() => {
