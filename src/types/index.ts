@@ -20,6 +20,22 @@ export interface AudioDevice {
   is_default?: boolean;
   type: 'microphone' | 'usb' | 'line' | 'other';
   available?: boolean;
+  device_kind?: 'hardware' | 'virtual' | 'default';
+}
+
+export interface AudioDiagnostics {
+  platform: string;
+  portaudio_available: boolean;
+  default_input_device: number | null;
+  devices: AudioDevice[];
+  selected_device: AudioDevice | null;
+  stream_active: boolean;
+  frames_received: number;
+  last_frame_ms: number | null;
+  native_samplerate: number;
+  processing_samplerate: number;
+  hostapi?: string;
+  error?: string | null;
 }
 
 export interface AppSettings {

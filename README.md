@@ -67,13 +67,30 @@ auto-voice-recorder/
 
 ## 🚀 Installation & Lancement sur Kali Linux
 
+### Kali Linux Setup
+
 ### 1. Prérequis système Kali
 
 Installez les dépendances audio et système :
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip portaudio19-dev ffmpeg nodejs npm gnuradio hackrf
+sudo apt install -y \
+    python3 python3-venv python3-pip \
+    portaudio19-dev libportaudio2 alsa-utils pulseaudio-utils
 ```
+
+Vérifiez ensuite la visibilité ALSA **et** PortAudio (les nombres entre crochets
+sont les vrais identifiants PortAudio conservés par l'interface) :
+
+```bash
+arecord -l
+python -m sounddevice
+python scripts/audio_diagnostic.py --device 2
+```
+
+PipeWire/PulseAudio et les entrées `default`, `pulse` ou `pipewire` restent des
+choix valides. Si l'accès ALSA matériel direct échoue, sélectionnez l'une de ces
+entrées virtuelles dans l'application. Ne codez pas `hw:2,0` dans la configuration.
 
 ### 2. Démarrage rapide (Script automatique)
 
@@ -102,6 +119,9 @@ pip install -r backend/requirements.txt
 # Lancer FastAPI
 uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+> Lancez toujours le backend dans la session de l'utilisateur, **jamais avec
+> `sudo`** : root n'a généralement pas accès à la session PipeWire/PulseAudio.
 
 #### B. Frontend React / Vite
 
@@ -168,6 +188,8 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 
 - `GET /api/health` : État de santé du système et moteur audio
 - `GET /api/audio/devices` : Liste des interfaces audio ALSA / Pulse / USB
+- `POST /api/audio/test-input` : capture réelle 2,5 s (JSON `{ "device_id": 2 }`)
+- `GET /api/audio/diagnostics` : PortAudio, périphérique/rates, frames et dernier callback
 - `GET /api/audio/instruments` : présence réellement sondée des entrées, de GNU Radio, du FIFO et du HackRF
 - `GET /api/settings` : Récupère la configuration actuelle
 - `PUT /api/settings` : Sauvegarde la configuration dans `config.json`

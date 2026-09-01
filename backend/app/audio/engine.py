@@ -124,16 +124,18 @@ class MainAudioEngine:
 
     def stop(self) -> None:
         self._is_running = False
+        # Closing first unblocks a worker waiting in read_chunk and releases ALSA
+        # promptly, making repeated Start/Stop safe.
+        if self.source is not None:
+            try:
+                self.source.stop()
+            except Exception as exc:
+                print(f"[AUDIO ERROR] Stream close failed: {exc}")
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-        if self.source is not None:
-            try:
-                self.source.stop()
-            except Exception:
-                pass
-            self.source = None
+        self.source = None
 
         self.recorder.stop_and_flush()
         self.current_status = "idle"
@@ -152,6 +154,17 @@ class MainAudioEngine:
                 chunk = self.source.read_chunk(chunk_size=1024)
                 if chunk is None or len(chunk) == 0:
                     now = time.time()
+                    if self.started_at and now - self.started_at >= 2.0 and self.last_audio_frame_at is None and self.current_error is None:
+                        self.current_error = "No audio callback received for 2 seconds"
+                        print("[AUDIO ERROR] No audio callback received for 2 seconds")
+                    elif self.last_audio_frame_at and now - self.last_audio_frame_at >= 2.0:
+                        self.current_error = "Audio device disconnected or stopped delivering frames"
+                        self.current_status = "error"
+                        print("[AUDIO ERROR] Device disconnected: no frames for 2 seconds")
+                        self._is_running = False
+                        self.source.stop()
+                        self._broadcast(self.get_telemetry())
+                        break
                     if now - last_broadcast_time >= 0.12:
                         self._broadcast(self.get_telemetry())
                         last_broadcast_time = now
@@ -165,6 +178,8 @@ class MainAudioEngine:
                 self.current_peak_dbfs = round(self.rms_detector.rms_to_dbfs(peak), 1)
                 self.frames_received += len(chunk)
                 self.last_audio_frame_at = time.time()
+                if self.current_error == "No audio callback received for 2 seconds":
+                    self.current_error = None
                 self._noise_levels.append(dbfs)
                 self.noise_floor_dbfs = round(float(np.percentile(self._noise_levels, 20)), 1)
 
@@ -236,7 +251,13 @@ class MainAudioEngine:
             "capture_sample_rate": getattr(source, "capture_sample_rate", self.config.sample_rate),
             "processing_sample_rate": self.config.sample_rate,
             "channels": 1,
+            "capture_channels": getattr(source, "capture_channels", 1),
+            "hostapi": getattr(source, "host_api", ""),
         }
+
+    def restart(self) -> bool:
+        self.stop()
+        return self.start()
 
     def calibrate_noise_floor(self, duration_sec: float = 5.0) -> Dict[str, Any]:
         """
