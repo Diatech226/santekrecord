@@ -19,6 +19,7 @@ export interface AudioDevice {
   default_samplerate: number;
   is_default?: boolean;
   type: 'microphone' | 'usb' | 'line' | 'other';
+  available?: boolean;
 }
 
 export interface AppSettings {

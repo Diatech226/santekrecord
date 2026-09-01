@@ -1,6 +1,9 @@
 import os
 import json
 import time
+import stat
+import shutil
+import subprocess
 import numpy as np
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
@@ -33,35 +36,37 @@ def get_health(engine=Depends(get_engine)):
 @router.get("/audio/devices")
 def get_devices():
     devices = MicrophoneSource.list_devices()
-    if not devices:
-        # Fallback list for offline / simulated Linux environment
-        devices = [
-            {
-                "id": 0,
-                "name": "Default ALSA / PulseAudio Microphone",
-                "max_input_channels": 1,
-                "default_samplerate": 16000,
-                "is_default": True,
-                "type": "microphone",
-            },
-            {
-                "id": 1,
-                "name": "USB Audio Device / Line-In",
-                "max_input_channels": 2,
-                "default_samplerate": 16000,
-                "is_default": False,
-                "type": "usb",
-            },
-            {
-                "id": "gnuradio-fifo",
-                "name": "GNU Radio FIFO (/tmp/hackrf_audio.f32)",
-                "max_input_channels": 1,
-                "default_samplerate": 16000,
-                "is_default": False,
-                "type": "other",
-            },
-        ]
-    return devices
+    return [{**device, "available": True} for device in devices]
+
+
+@router.get("/audio/instruments")
+def get_instruments(engine=Depends(get_engine)):
+    """Report only observed hardware/software capabilities; never invent devices."""
+    fifo_path = engine.config.fifo_path
+    fifo_exists = os.path.exists(fifo_path) and stat.S_ISFIFO(os.stat(fifo_path).st_mode)
+    hackrf_tool = shutil.which("hackrf_info")
+    hackrf_present = False
+    hackrf_detail = "hackrf_info is not installed"
+    if hackrf_tool:
+        try:
+            probe = subprocess.run(
+                [hackrf_tool], capture_output=True, text=True, timeout=4, check=False
+            )
+            output = (probe.stdout + probe.stderr).strip()
+            hackrf_present = probe.returncode == 0 and "No HackRF boards found" not in output
+            hackrf_detail = output.splitlines()[0] if output else f"exit code {probe.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            hackrf_detail = str(exc)
+    audio_devices = MicrophoneSource.list_devices()
+    return {
+        "audio_inputs": len(audio_devices),
+        "sounddevice_available": bool(audio_devices),
+        "gnuradio_installed": shutil.which("gnuradio-companion") is not None,
+        "fifo_path": fifo_path,
+        "fifo_ready": fifo_exists,
+        "hackrf_present": hackrf_present,
+        "hackrf_detail": hackrf_detail,
+    }
 
 
 @router.get("/settings", response_model=AppConfig)
@@ -94,12 +99,16 @@ def stop_monitoring(engine=Depends(get_engine)):
 
 
 @router.post("/audio/test")
-def test_input(device_id: Optional[int | str] = None, engine=Depends(get_engine)):
+def test_input(device_id: Optional[int | str] = None, source_type: str = "microphone", engine=Depends(get_engine)):
     """Open the selected hardware independently and report real samples for 3 seconds."""
     if engine._is_running:
         telemetry = engine.get_telemetry()
         return {"working": telemetry["audio_frames_received"], **telemetry}
-    source = MicrophoneSource(device_id=device_id, sample_rate=engine.config.sample_rate)
+    if source_type == "gnuradio":
+        from ..audio.gnuradio import GNURadioSource
+        source = GNURadioSource(engine.config.fifo_path, engine.config.sample_rate)
+    else:
+        source = MicrophoneSource(device_id=device_id, sample_rate=engine.config.sample_rate)
     levels, peaks, frames = [], [], 0
     try:
         source.start()
@@ -123,7 +132,7 @@ def test_input(device_id: Optional[int | str] = None, engine=Depends(get_engine)
         "level_dbfs": round(levels[-1], 1) if levels else -100.0,
         "peak_dbfs": round(max(peaks), 1) if peaks else -100.0,
         "frames_received": frames,
-        "capture_sample_rate": source.capture_sample_rate,
+        "capture_sample_rate": getattr(source, "capture_sample_rate", source.sample_rate),
     }
 
 

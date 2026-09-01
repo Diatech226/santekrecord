@@ -5,18 +5,22 @@
 
 set -e
 
+# Always operate from the repository, even when launched from another directory.
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+
 echo "=== Auto Voice Recorder (Kali Linux) ==="
 
-# 1. Check Python3
-if ! command -v python3 &> /dev/null; then
-    echo "[!] Python3 not found. Installing..."
-    sudo apt update && sudo apt install -y python3 python3-venv python3-pip portaudio19-dev ffmpeg
-fi
-
-# 2. Check Node.js
-if ! command -v npm &> /dev/null; then
-    echo "[!] Node.js / npm not found. Installing..."
-    sudo apt update && sudo apt install -y nodejs npm
+# 1. Install the complete runtime instead of assuming that the presence of
+# python3 means ALSA/PortAudio headers and venv support are also installed.
+SYSTEM_PACKAGES=(python3 python3-venv python3-pip portaudio19-dev libportaudio2 ffmpeg nodejs npm)
+MISSING_PACKAGES=()
+for package in "${SYSTEM_PACKAGES[@]}"; do
+    dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed" || MISSING_PACKAGES+=("$package")
+done
+if ((${#MISSING_PACKAGES[@]})); then
+    echo "[*] Installing missing Kali packages: ${MISSING_PACKAGES[*]}"
+    sudo apt update
+    sudo apt install -y "${MISSING_PACKAGES[@]}"
 fi
 
 # 3. Create & Activate Python Virtual Environment
@@ -39,6 +43,10 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # 5. Create FIFO for GNU Radio HackRF if not present
+if [ -e "/tmp/hackrf_audio.f32" ] && [ ! -p "/tmp/hackrf_audio.f32" ]; then
+    echo "[!] Removing non-FIFO file at /tmp/hackrf_audio.f32"
+    rm -f /tmp/hackrf_audio.f32
+fi
 if [ ! -p "/tmp/hackrf_audio.f32" ]; then
     echo "[*] Creating GNU Radio FIFO at /tmp/hackrf_audio.f32..."
     mkfifo /tmp/hackrf_audio.f32 || true
@@ -46,7 +54,7 @@ fi
 
 # 6. Launch Backend & Frontend
 echo "[*] Starting FastAPI Backend on http://127.0.0.1:8000 ..."
-python3 -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 &
+python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 echo "[*] Starting Vite / Express Frontend on http://127.0.0.1:3000 ..."

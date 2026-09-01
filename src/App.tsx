@@ -8,7 +8,6 @@ import {
   RecordingMeta,
 } from './types';
 import { api } from './services/api';
-import { AudioProcessorEngine } from './services/audioProcessor';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AudioMeter } from './components/AudioMeter';
 import { SourceSelector } from './components/SourceSelector';
@@ -91,18 +90,20 @@ export default function App() {
   }, [status, isMonitoring, durationSec]);
 
   // Audio Engine Ref
-  const engineRef = useRef<AudioProcessorEngine | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const connectMonitorSocket = useCallback(() => {
     wsRef.current?.close();
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/monitor`);
+      const socket = new WebSocket(`${protocol}//${window.location.hostname}:8000/ws/monitor`);
       socket.onmessage = (event) => {
         try {
           const update = JSON.parse(event.data) as MonitorUpdate;
-          if (update.event === 'recording_saved') return;
+          if (update.event === 'recording_saved') {
+            api.getRecordings().then(setRecordings).catch(() => {});
+            return;
+          }
           setTelemetry(update);
           if (update.level_dbfs !== undefined) setLevelDbfs(update.level_dbfs);
           if (update.peak_dbfs !== undefined) setPeakDbfs(update.peak_dbfs);
@@ -168,21 +169,8 @@ export default function App() {
       const updated: AppSettings = { ...settings, ...partial };
       setSettings(updated);
       await api.saveSettings(updated);
-      if (engineRef.current) {
-        engineRef.current.updateSettings(updated);
-      }
     },
     [settings]
-  );
-
-  // Handle incoming recording completion
-  const handleRecordingComplete = useCallback(
-    async (meta: RecordingMeta, blob: Blob) => {
-      const savedMeta = await api.saveRecording(meta, blob);
-      setRecordings((prev) => [savedMeta, ...prev.filter((r) => r.recording_id !== savedMeta.recording_id)]);
-      setSelectedRecording(savedMeta);
-    },
-    []
   );
 
   // Start / Stop monitoring
@@ -191,9 +179,6 @@ export default function App() {
 
     if (isMonitoring) {
       // Stop
-      if (engineRef.current) {
-        engineRef.current.stop();
-      }
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -210,52 +195,10 @@ export default function App() {
     } else {
       // Start
       try {
-        const engine = new AudioProcessorEngine(settings);
-        engineRef.current = engine;
-
-        engine.setCallbacks(
-          (update: MonitorUpdate) => {
-            setLevelDbfs(update.level_dbfs);
-            if (update.peak_dbfs !== undefined) {
-              setPeakDbfs(update.peak_dbfs);
-            } else {
-              setPeakDbfs((prev) => Math.max(prev * 0.95, update.level_dbfs));
-            }
-            setSpeechProb(update.speech_probability);
-            setVoiceDetected(update.voice_detected);
-            setStatus(update.status);
-            if (update.ambient_noise_dbfs !== undefined) {
-              setAmbientNoiseDbfs(update.ambient_noise_dbfs);
-            }
-            if (update.effective_gain !== undefined) {
-              setEffectiveGain(update.effective_gain);
-            }
-            if (update.waveform) {
-              setLiveWaveform(update.waveform);
-            }
-            if (update.spectrum) {
-              setSpectrum(update.spectrum);
-            }
-            if (update.current_duration_sec !== undefined) {
-              setDurationSec(update.current_duration_sec);
-            }
-          },
-          handleRecordingComplete,
-          (err) => {
-            setErrorMessage(err);
-            setStatus('error');
-            setIsMonitoring(false);
-          }
-        );
-
-        const ok = await engine.start();
-        if (ok) {
-          api.getAudioDevices().then((devs) => setDevices(devs)).catch(() => {});
-          api.startMonitoring(settings).catch(() => {});
-          connectMonitorSocket();
-          setIsMonitoring(true);
-          setStatus('listening');
-        }
+        await api.startMonitoring(settings);
+        connectMonitorSocket();
+        setIsMonitoring(true);
+        setStatus('listening');
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Unable to start monitoring');
         setStatus('error');
@@ -265,9 +208,6 @@ export default function App() {
 
   // Run calibration
   const runCalibration = async () => {
-    if (engineRef.current && isMonitoring) {
-      return await engineRef.current.runCalibration(5);
-    }
     const result = await api.calibrateNoise();
     localStorage.setItem(`audio_calibration:${settings.device_id ?? settings.device_name}`, JSON.stringify(result));
     return result;
@@ -281,7 +221,7 @@ export default function App() {
     setIsTestingInput(true);
     setTestResult(null);
     try {
-      const result = await api.testInput(settings.device_id);
+      const result = await api.testInput(settings.device_id, settings.source);
       setTestResult(result.working
         ? `Input working · Level ${result.level_dbfs.toFixed(1)} dBFS · Peak ${result.peak_dbfs.toFixed(1)} dBFS`
         : 'No audio data received');
@@ -625,8 +565,8 @@ export default function App() {
                 ambientNoiseDbfs={ambientNoiseDbfs}
                 liveWaveform={liveWaveform}
                 spectrum={spectrum}
-                analyserNode={engineRef.current?.getAnalyserNode()}
-                sampleRate={engineRef.current?.getSampleRate()}
+                analyserNode={null}
+                sampleRate={settings.sample_rate}
               />
 
               {isMonitoring && (
