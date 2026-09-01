@@ -4,10 +4,12 @@ import time
 import stat
 import shutil
 import subprocess
+import platform
 import numpy as np
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from ..config.settings import AppConfig, load_config, save_config
 from ..audio.microphone import MicrophoneSource
@@ -37,6 +39,39 @@ def get_health(engine=Depends(get_engine)):
 def get_devices():
     devices = MicrophoneSource.list_devices()
     return [{**device, "available": True} for device in devices]
+
+
+class InputTestRequest(BaseModel):
+    device_id: Optional[int] = None
+    duration_seconds: float = 2.5
+
+
+@router.get("/audio/diagnostics")
+def audio_diagnostics(engine=Depends(get_engine)):
+    devices = MicrophoneSource.list_devices()
+    try:
+        from ..audio.microphone import sd
+        default_input = int(sd.default.device[0]) if sd is not None else None
+        portaudio_available = sd is not None
+    except Exception:
+        default_input, portaudio_available = None, False
+    selected_id = int(engine.config.device_id) if str(engine.config.device_id).isdigit() else None
+    selected = next((d for d in devices if d["id"] == selected_id), None)
+    telemetry = engine.get_telemetry()
+    return {
+        "platform": platform.system().lower(),
+        "portaudio_available": portaudio_available,
+        "default_input_device": default_input,
+        "devices": devices,
+        "selected_device": selected,
+        "stream_active": engine._is_running,
+        "frames_received": telemetry["frames_received"],
+        "last_frame_ms": telemetry["last_audio_frame_ms"],
+        "native_samplerate": telemetry["capture_sample_rate"],
+        "processing_samplerate": telemetry["processing_sample_rate"],
+        "hostapi": telemetry.get("hostapi"),
+        "error": engine.current_error,
+    }
 
 
 @router.get("/audio/instruments")
@@ -133,6 +168,48 @@ def test_input(device_id: Optional[int | str] = None, source_type: str = "microp
         "peak_dbfs": round(max(peaks), 1) if peaks else -100.0,
         "frames_received": frames,
         "capture_sample_rate": getattr(source, "capture_sample_rate", source.sample_rate),
+    }
+
+
+@router.post("/audio/test-input")
+def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
+    """Capture a selected real PortAudio input and return measurable signal data."""
+    if engine._is_running:
+        raise HTTPException(status_code=409, detail="Stop monitoring before testing an input")
+    source = MicrophoneSource(device_id=request.device_id, sample_rate=engine.config.sample_rate)
+    frames = 0
+    sum_squares = 0.0
+    peak = 0.0
+    try:
+        source.start()
+        deadline = time.monotonic() + min(5.0, max(0.5, request.duration_seconds))
+        while time.monotonic() < deadline:
+            chunk = source.read_chunk()
+            if chunk is None or not len(chunk):
+                continue
+            frames += len(chunk)
+            sum_squares += float(np.sum(np.square(chunk, dtype=np.float64)))
+            peak = max(peak, float(np.max(np.abs(chunk))))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail={
+            "success": False,
+            "error": str(exc),
+            "suggested_samplerate": getattr(source, "capture_sample_rate", None),
+        })
+    finally:
+        source.stop()
+    rms = float(np.sqrt(sum_squares / frames)) if frames else 0.0
+    return {
+        "success": frames > 0,
+        "device_id": request.device_id,
+        "device_name": source.device_name,
+        "native_samplerate": source.capture_sample_rate,
+        "channels": source.capture_channels,
+        "frames_received": frames,
+        "rms": rms,
+        "level_dbfs": round(RMSDetector.rms_to_dbfs(rms), 1),
+        "peak_dbfs": round(RMSDetector.rms_to_dbfs(peak), 1),
+        "error": None if frames else "No audio frames received",
     }
 
 

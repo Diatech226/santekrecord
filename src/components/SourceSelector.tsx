@@ -99,7 +99,7 @@ export const SourceSelector: React.FC<Props> = ({
             )}
             {filteredDevices.map((dev) => (
               <option key={dev.id} value={String(dev.id)}>
-                [{dev.hostapi || 'audio'}] {dev.name} {dev.is_default ? '(défaut)' : ''}
+                [{dev.hostapi || 'audio'} · {dev.device_kind || 'hardware'}] {dev.name} {dev.is_default ? '(défaut)' : ''}
               </option>
             ))}
           </select>

@@ -1,4 +1,3 @@
-import json
 import asyncio
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -33,11 +32,20 @@ ws_manager = WebSocketManager()
 async def websocket_monitor_endpoint(websocket: WebSocket, engine):
     await ws_manager.connect(websocket)
 
-    # Bridge engine sync broadcast to async websocket manager
-    loop = asyncio.get_event_loop()
+    # A dedicated bounded asyncio queue avoids touching WebSocket/asyncio from
+    # PortAudio's processing thread and avoids N-clients producing N broadcasts.
+    loop = asyncio.get_running_loop()
+    updates: asyncio.Queue[dict] = asyncio.Queue(maxsize=2)
 
     def sync_broadcast_bridge(telemetry_data: dict):
-        asyncio.run_coroutine_threadsafe(ws_manager.broadcast_json(telemetry_data), loop)
+        def enqueue():
+            if updates.full():
+                try:
+                    updates.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            updates.put_nowait(telemetry_data)
+        loop.call_soon_threadsafe(enqueue)
 
     engine.subscribe(sync_broadcast_bridge)
 
@@ -45,17 +53,12 @@ async def websocket_monitor_endpoint(websocket: WebSocket, engine):
         # Send immediate initial telemetry
         await websocket.send_json(engine.get_telemetry())
         while True:
-            # Keep socket open and receive any client-side commands if sent
-            data = await websocket.receive_text()
             try:
-                cmd = json.loads(data)
-                if cmd.get("action") == "start":
-                    engine.start()
-                elif cmd.get("action") == "stop":
-                    engine.stop()
-            except Exception:
-                pass
-    except WebSocketDisconnect:
+                update = await asyncio.wait_for(updates.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                update = engine.get_telemetry()
+            await websocket.send_json(update)
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         engine.unsubscribe(sync_broadcast_bridge)

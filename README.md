@@ -267,6 +267,8 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 
 - `GET /api/health` : État de santé du système et moteur audio
 - `GET /api/audio/devices` : Liste des interfaces audio ALSA / Pulse / USB
+- `POST /api/audio/test-input` : capture réelle 2,5 s (JSON `{ "device_id": 2 }`)
+- `GET /api/audio/diagnostics` : PortAudio, périphérique/rates, frames et dernier callback
 - `GET /api/audio/instruments` : présence réellement sondée des entrées, de GNU Radio, du FIFO et du HackRF
 - `GET /api/settings` : Récupère la configuration actuelle
 - `PUT /api/settings` : Sauvegarde la configuration dans `config.json`

@@ -91,6 +91,7 @@ export default function App() {
 
   // Audio Engine Ref
   const wsRef = useRef<WebSocket | null>(null);
+  const monitoringRef = useRef(false);
 
   const connectMonitorSocket = useCallback(() => {
     wsRef.current?.close();
@@ -119,7 +120,11 @@ export default function App() {
         }
       };
       socket.onerror = () => {
-        // Soft fallback for environments without active WS server
+        setErrorMessage('WebSocket monitoring connection failed');
+      };
+      socket.onclose = () => {
+        if (wsRef.current === socket) wsRef.current = null;
+        if (monitoringRef.current) window.setTimeout(connectMonitorSocket, 1000);
       };
       wsRef.current = socket;
     } catch {
@@ -179,6 +184,7 @@ export default function App() {
 
     if (isMonitoring) {
       // Stop
+      monitoringRef.current = false;
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -196,6 +202,7 @@ export default function App() {
       // Start
       try {
         await api.startMonitoring(settings);
+        monitoringRef.current = true;
         connectMonitorSocket();
         setIsMonitoring(true);
         setStatus('listening');
