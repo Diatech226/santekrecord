@@ -37,6 +37,8 @@ export interface AppSettings {
   // Sound Card Gain & Channel Routing
   input_gain?: number;
   input_channel?: 'auto' | 'channel_1' | 'channel_2';
+  // Automatic Gain Control (AGC) based on ambient noise floor measurements
+  auto_gain_control?: boolean;
   // HackRF / GNU Radio specific
   frequency_hz?: number;
   modulation?: string;
@@ -67,6 +69,8 @@ export interface MonitorUpdate {
   processing_sample_rate?: number;
   channels?: number;
   ambient_noise_dbfs?: number;
+  effective_gain?: number;
+  agc_active?: boolean;
   waveform?: number[];
   spectrum?: number[];
   active_source?: string;

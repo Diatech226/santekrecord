@@ -8,6 +8,8 @@ interface Props {
   disabled?: boolean;
   onUpdateSettings: (newSettings: Partial<AppSettings>) => void;
   onOpenCalibration: () => void;
+  ambientNoiseDbfs?: number;
+  effectiveGain?: number;
 }
 
 export const SettingsPanel: React.FC<Props> = ({
@@ -15,6 +17,8 @@ export const SettingsPanel: React.FC<Props> = ({
   disabled = false,
   onUpdateSettings,
   onOpenCalibration,
+  ambientNoiseDbfs,
+  effectiveGain,
 }) => {
   const { t } = useLanguage();
 
@@ -158,14 +162,62 @@ export const SettingsPanel: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Sound Card Input Gain & Channel Routing */}
+        {/* Sound Card Input Gain, Automatic Gain Control & Channel Routing */}
         <div className="p-2.5 rounded bg-[#111215] border border-[#1F2228] space-y-3">
+          
+          {/* Automatic Gain Control (AGC) Toggle */}
+          <div className="space-y-1.5 pb-2.5 border-b border-[#1A1B1F]">
+            <div className="flex items-center justify-between">
+              <label htmlFor="agc-toggle" className="text-[10px] text-[#E0E0E0] uppercase tracking-wider font-semibold cursor-pointer">
+                {t.autoGainControl}
+              </label>
+              <button
+                id="agc-toggle"
+                type="button"
+                role="switch"
+                aria-checked={Boolean(settings.auto_gain_control)}
+                disabled={disabled}
+                onClick={() => onUpdateSettings({ auto_gain_control: !settings.auto_gain_control })}
+                className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
+                  settings.auto_gain_control ? 'bg-[#00F0FF]' : 'bg-[#2A2B2F]'
+                }`}
+              >
+                <span
+                  className={`inline-block h-3 w-3 transform rounded-full bg-[#0A0B0D] transition-transform ${
+                    settings.auto_gain_control ? 'translate-x-4' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[9px] text-[#707070]">{t.autoGainControlDesc}</p>
+
+            {settings.auto_gain_control && (
+              <div id="agc-telemetry-badge" className="mt-2 p-2 bg-[#00F0FF]/10 border border-[#00F0FF]/30 rounded space-y-1">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-[#00F0FF] font-bold flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00F0FF] animate-pulse"></span>
+                    {t.agcActiveBadge}
+                  </span>
+                  <span className="font-mono text-[#00F0FF] font-bold">
+                    {(effectiveGain ?? settings.input_gain ?? 1.0).toFixed(1)}x ({Math.round(20 * Math.log10(effectiveGain ?? settings.input_gain ?? 1.0))} dB)
+                  </span>
+                </div>
+                <div className="flex justify-between text-[9px] text-[#A0A0A0]">
+                  <span>{t.agcNoiseFloorTarget}:</span>
+                  <span className="font-mono text-[#E0E0E0]">{(ambientNoiseDbfs ?? -60.0).toFixed(1)} dBFS → -48 dBFS</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Software Gain Boost */}
-          <div className="space-y-1.5">
+          <div className={`space-y-1.5 ${settings.auto_gain_control ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="flex justify-between text-[10px]">
-              <span className="text-[#E0E0E0] uppercase tracking-wider font-semibold">{t.inputGain}</span>
+              <span className="text-[#E0E0E0] uppercase tracking-wider font-semibold">
+                {t.inputGain} {settings.auto_gain_control && '(AGC Auto-Managed)'}
+              </span>
               <span className="text-[#00F0FF] font-mono font-bold">
-                {(settings.input_gain ?? 1.0).toFixed(1)}x ({Math.round(20 * Math.log10(settings.input_gain ?? 1.0))} dB)
+                {(settings.auto_gain_control ? (effectiveGain ?? settings.input_gain ?? 1.0) : (settings.input_gain ?? 1.0)).toFixed(1)}x ({Math.round(20 * Math.log10(settings.auto_gain_control ? (effectiveGain ?? settings.input_gain ?? 1.0) : (settings.input_gain ?? 1.0)))} dB)
               </span>
             </div>
             <input
@@ -174,7 +226,7 @@ export const SettingsPanel: React.FC<Props> = ({
               min="1.0"
               max="8.0"
               step="0.5"
-              disabled={disabled}
+              disabled={disabled || Boolean(settings.auto_gain_control)}
               value={settings.input_gain ?? 1.0}
               onChange={(e) => onUpdateSettings({ input_gain: Number(e.target.value) })}
               className="w-full accent-[#00F0FF] h-1.5 bg-[#1A1B1F] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
@@ -183,7 +235,9 @@ export const SettingsPanel: React.FC<Props> = ({
               <span>1.0x (Standard)</span>
               <span>8.0x (+18 dB Boost)</span>
             </div>
-            <p className="text-[9px] text-[#707070]">{t.inputGainDesc}</p>
+            {!settings.auto_gain_control && (
+              <p className="text-[9px] text-[#707070]">{t.inputGainDesc}</p>
+            )}
           </div>
 
           {/* Input Channel Routing */}

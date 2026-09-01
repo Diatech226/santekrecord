@@ -27,6 +27,11 @@ export interface Translations {
   rate16k: string;
   inputGain: string;
   inputGainDesc: string;
+  autoGainControl: string;
+  autoGainControlDesc: string;
+  agcActiveBadge: string;
+  agcDynamicGain: string;
+  agcNoiseFloorTarget: string;
   inputChannel: string;
   channelAuto: string;
   channel1: string;
@@ -194,6 +199,10 @@ export interface Translations {
   viewSpectrum: string;
   viewHeatmap: string;
   viewCombined: string;
+  peak5sMarker: string;
+  peak5sMaxFreq: string;
+  highestFreqBin: string;
+  peak5sHold: string;
   reticle: string;
   harmonicMarkers: string;
   interferenceMitigation: string;
@@ -232,6 +241,20 @@ export interface Translations {
   viewJsonMeta: string;
   downloadWav: string;
   deleteRecording: string;
+  zoomIn: string;
+  zoomOut: string;
+  zoomReset: string;
+  zoomFit: string;
+  waveformZoom: string;
+  zoomWindow: string;
+  panLeft: string;
+  panRight: string;
+  autoScrollPlayhead: string;
+  normalizeAudio: string;
+  normalizeAudioDesc: string;
+  normalizedBadge: string;
+  originalPeak: string;
+  boostApplied: string;
 
   // Calibration Modal
   calibTitle: string;
@@ -282,6 +305,11 @@ export const translations: Record<Language, Translations> = {
     rate16k: 'Rate: 16000 Hz',
     inputGain: 'Software Input Gain',
     inputGainDesc: 'Amplification boost for low-level microphones or sound card inputs',
+    autoGainControl: 'Automatic Gain Control (AGC)',
+    autoGainControlDesc: 'Dynamically adapts input gain based on ambient noise floor measurements to optimize signal-to-noise ratio',
+    agcActiveBadge: 'AGC DYNAMIC ACTIVE',
+    agcDynamicGain: 'Dynamic AGC Gain',
+    agcNoiseFloorTarget: 'Adapting to noise floor',
     inputChannel: 'Input Channel Routing',
     channelAuto: 'Auto Mix (Channel 1 + 2)',
     channel1: 'Channel 1 (Left / Primary)',
@@ -442,6 +470,10 @@ export const translations: Record<Language, Translations> = {
     viewSpectrum: 'FFT Spectrum',
     viewHeatmap: 'Waterfall Heatmap',
     viewCombined: 'Combined View',
+    peak5sMarker: '5s Peak Marker',
+    peak5sMaxFreq: '5s MAX FREQ',
+    highestFreqBin: 'HIGHEST BIN (5s)',
+    peak5sHold: '5s Peak Hold',
     reticle: 'Crosshair Reticle',
     harmonicMarkers: 'Harmonic Guides',
     interferenceMitigation: 'Mitigation Recommendation',
@@ -479,6 +511,20 @@ export const translations: Record<Language, Translations> = {
     viewJsonMeta: 'View JSON metadata',
     downloadWav: 'Download WAV',
     deleteRecording: 'Delete recording',
+    zoomIn: 'Zoom In',
+    zoomOut: 'Zoom Out',
+    zoomReset: 'Reset Zoom (1x)',
+    zoomFit: 'Fit',
+    waveformZoom: 'Waveform Zoom',
+    zoomWindow: 'Visible Window',
+    panLeft: 'Pan Left',
+    panRight: 'Pan Right',
+    autoScrollPlayhead: 'Follow Playhead',
+    normalizeAudio: 'Normalize Audio',
+    normalizeAudioDesc: 'Boosts quiet recordings to standard peak (-0.9 dBFS) during playback without altering original WAV',
+    normalizedBadge: 'NORM',
+    originalPeak: 'Original Peak',
+    boostApplied: 'Boost',
 
     calibTitle: 'Noise Floor Calibration',
     calibDesc: 'Automated calibration measures ambient noise floor across 5 seconds and calculates the optimal trigger threshold with high SNR margin.',
@@ -525,6 +571,11 @@ export const translations: Record<Language, Translations> = {
     rate16k: 'Fréquence: 16000 Hz',
     inputGain: 'Gain d\'Entrée Logiciel',
     inputGainDesc: 'Amplification du signal pour carte son, entrée ligne ou microphone à faible niveau',
+    autoGainControl: 'Contrôle Automatique du Gain (AGC)',
+    autoGainControlDesc: 'Ajuste dynamiquement le gain d\'entrée selon le niveau de bruit de fond mesuré pour optimiser le rapport signal/bruit',
+    agcActiveBadge: 'AGC DYNAMIQUE ACTIF',
+    agcDynamicGain: 'Gain dynamique AGC',
+    agcNoiseFloorTarget: 'Adapté au bruit ambiant',
     inputChannel: 'Routage du Canal d\'Entrée',
     channelAuto: 'Auto Mix (Canaux 1 + 2)',
     channel1: 'Canal 1 (Gauche / Principal)',
@@ -685,6 +736,10 @@ export const translations: Record<Language, Translations> = {
     viewSpectrum: 'Spectre FFT',
     viewHeatmap: 'Carte Waterfall',
     viewCombined: 'Vue Combinée',
+    peak5sMarker: 'Repère Crête 5s',
+    peak5sMaxFreq: 'FRÉQ MAX 5s',
+    highestFreqBin: 'BIN MAX (5s)',
+    peak5sHold: 'Maintien Crête 5s',
     reticle: 'Réticule Télémesure',
     harmonicMarkers: 'Repères Harmoniques',
     interferenceMitigation: 'Recommandation d\'Atténuation',
@@ -722,6 +777,20 @@ export const translations: Record<Language, Translations> = {
     viewJsonMeta: 'Voir les métadonnées JSON',
     downloadWav: 'Télécharger WAV',
     deleteRecording: 'Supprimer l\'enregistrement',
+    zoomIn: 'Zoomer',
+    zoomOut: 'Dézoomer',
+    zoomReset: 'Réinitialiser Zoom (1x)',
+    zoomFit: 'Ajuster',
+    waveformZoom: 'Zoom de Forme d\'Onde',
+    zoomWindow: 'Fenêtre Visible',
+    panLeft: 'Défiler à Gauche',
+    panRight: 'Défiler à Droite',
+    autoScrollPlayhead: 'Suivre la Tête de Lecture',
+    normalizeAudio: 'Normaliser l\'Audio',
+    normalizeAudioDesc: 'Amplifie les enregistrements faibles au niveau crête standard (-0,9 dBFS) à la lecture sans modifier le fichier WAV original',
+    normalizedBadge: 'NORM',
+    originalPeak: 'Crête Originale',
+    boostApplied: 'Gain',
 
     calibTitle: 'Étalonnage du Bruit de Fond',
     calibDesc: 'L\'étalonnage automatisé mesure le bruit ambiant pendant 5 secondes et calcule le seuil de déclenchement optimal.',

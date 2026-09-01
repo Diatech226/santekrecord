@@ -50,6 +50,7 @@ export default function App() {
   const [speechProb, setSpeechProb] = useState(0);
   const [voiceDetected, setVoiceDetected] = useState(false);
   const [ambientNoiseDbfs, setAmbientNoiseDbfs] = useState<number>(-60);
+  const [effectiveGain, setEffectiveGain] = useState<number>(1.0);
   const [peakDbfs, setPeakDbfs] = useState(-90);
   const [telemetry, setTelemetry] = useState<MonitorUpdate | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
@@ -95,22 +96,34 @@ export default function App() {
 
   const connectMonitorSocket = useCallback(() => {
     wsRef.current?.close();
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.hostname}:8000/ws/monitor`);
-    socket.onmessage = (event) => {
-      const update = JSON.parse(event.data) as MonitorUpdate;
-      if (update.event === 'recording_saved') return;
-      setTelemetry(update);
-      setLevelDbfs(update.level_dbfs ?? -100);
-      setPeakDbfs(update.peak_dbfs ?? update.level_dbfs ?? -100);
-      setAmbientNoiseDbfs(update.noise_floor_dbfs ?? -100);
-      setSpeechProb(update.speech_probability ?? 0);
-      setVoiceDetected(Boolean(update.voice_detected));
-      setStatus(update.status ?? 'listening');
-      setErrorMessage(update.error_message || null);
-    };
-    socket.onerror = () => setErrorMessage('Monitoring WebSocket disconnected');
-    wsRef.current = socket;
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/monitor`);
+      socket.onmessage = (event) => {
+        try {
+          const update = JSON.parse(event.data) as MonitorUpdate;
+          if (update.event === 'recording_saved') return;
+          setTelemetry(update);
+          if (update.level_dbfs !== undefined) setLevelDbfs(update.level_dbfs);
+          if (update.peak_dbfs !== undefined) setPeakDbfs(update.peak_dbfs);
+          if (update.noise_floor_dbfs !== undefined) setAmbientNoiseDbfs(update.noise_floor_dbfs);
+          if (update.ambient_noise_dbfs !== undefined) setAmbientNoiseDbfs(update.ambient_noise_dbfs);
+          if (update.effective_gain !== undefined) setEffectiveGain(update.effective_gain);
+          if (update.speech_probability !== undefined) setSpeechProb(update.speech_probability);
+          if (update.voice_detected !== undefined) setVoiceDetected(Boolean(update.voice_detected));
+          if (update.status) setStatus(update.status);
+          if (update.error_message) setErrorMessage(update.error_message);
+        } catch {
+          // ignore malformed ws messages
+        }
+      };
+      socket.onerror = () => {
+        // Soft fallback for environments without active WS server
+      };
+      wsRef.current = socket;
+    } catch {
+      // WS connection fallback
+    }
   }, []);
 
   // Uptime ticker
@@ -197,12 +210,52 @@ export default function App() {
     } else {
       // Start
       try {
-        await api.startMonitoring(settings);
-        connectMonitorSocket();
-        // Refresh available audio device list now that microphone permission was granted
-        api.getAudioDevices().then((devs) => setDevices(devs)).catch(() => {});
-        setIsMonitoring(true);
-        setStatus('listening');
+        const engine = new AudioProcessorEngine(settings);
+        engineRef.current = engine;
+
+        engine.setCallbacks(
+          (update: MonitorUpdate) => {
+            setLevelDbfs(update.level_dbfs);
+            if (update.peak_dbfs !== undefined) {
+              setPeakDbfs(update.peak_dbfs);
+            } else {
+              setPeakDbfs((prev) => Math.max(prev * 0.95, update.level_dbfs));
+            }
+            setSpeechProb(update.speech_probability);
+            setVoiceDetected(update.voice_detected);
+            setStatus(update.status);
+            if (update.ambient_noise_dbfs !== undefined) {
+              setAmbientNoiseDbfs(update.ambient_noise_dbfs);
+            }
+            if (update.effective_gain !== undefined) {
+              setEffectiveGain(update.effective_gain);
+            }
+            if (update.waveform) {
+              setLiveWaveform(update.waveform);
+            }
+            if (update.spectrum) {
+              setSpectrum(update.spectrum);
+            }
+            if (update.current_duration_sec !== undefined) {
+              setDurationSec(update.current_duration_sec);
+            }
+          },
+          handleRecordingComplete,
+          (err) => {
+            setErrorMessage(err);
+            setStatus('error');
+            setIsMonitoring(false);
+          }
+        );
+
+        const ok = await engine.start();
+        if (ok) {
+          api.getAudioDevices().then((devs) => setDevices(devs)).catch(() => {});
+          api.startMonitoring(settings).catch(() => {});
+          connectMonitorSocket();
+          setIsMonitoring(true);
+          setStatus('listening');
+        }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Unable to start monitoring');
         setStatus('error');
@@ -212,6 +265,9 @@ export default function App() {
 
   // Run calibration
   const runCalibration = async () => {
+    if (engineRef.current && isMonitoring) {
+      return await engineRef.current.runCalibration(5);
+    }
     const result = await api.calibrateNoise();
     localStorage.setItem(`audio_calibration:${settings.device_id ?? settings.device_name}`, JSON.stringify(result));
     return result;
@@ -448,7 +504,9 @@ export default function App() {
             <div className="p-4 bg-[#111215] border border-[#1A1B1F] rounded-lg">
               <SettingsPanel
                 settings={settings}
-                disabled={isMonitoring}
+                disabled={false}
+                ambientNoiseDbfs={ambientNoiseDbfs}
+                effectiveGain={effectiveGain}
                 onUpdateSettings={handleUpdateSettings}
                 onOpenCalibration={() => setIsCalibModalOpen(true)}
               />
@@ -462,20 +520,23 @@ export default function App() {
                 onClick={toggleMonitoring}
                 style={
                   !isMonitoring
-                    ? {
+                    ? ({
                         backgroundColor: accentColor,
                         color: '#0A0B0D',
-                        boxShadow: `0 0 15px ${accentColor}59`,
-                      }
+                        '--accent-glow-color': `${accentColor}55`,
+                        '--accent-glow-color-bright': `${accentColor}A6`,
+                        '--accent-ring-color': `${accentColor}40`,
+                        '--accent-ring-color-faint': `${accentColor}20`,
+                      } as React.CSSProperties)
                     : undefined
                 }
-                className={`w-full py-3.5 px-4 font-mono font-bold text-xs uppercase tracking-[0.15em] rounded transition-all flex items-center justify-center gap-2 ${
+                className={`w-full py-3.5 px-4 font-mono font-bold text-xs uppercase tracking-[0.15em] rounded transition-all flex items-center justify-center gap-2 cursor-pointer ${
                   isMonitoring
                     ? 'bg-[#FF4444] hover:bg-[#FF2222] text-white shadow-[0_0_15px_rgba(255,68,68,0.4)]'
-                    : 'hover:brightness-110'
+                    : 'hover:brightness-110 animate-surveillance-breathe'
                 }`}
               >
-                <Power className="w-4 h-4" />
+                <Power className={`w-4 h-4 transition-transform duration-300 ${!isMonitoring ? 'group-hover:scale-110' : ''}`} />
                 {isMonitoring ? t.terminateSurveillance : t.startSurveillance}
               </button>
 
@@ -564,6 +625,8 @@ export default function App() {
                 ambientNoiseDbfs={ambientNoiseDbfs}
                 liveWaveform={liveWaveform}
                 spectrum={spectrum}
+                analyserNode={engineRef.current?.getAnalyserNode()}
+                sampleRate={engineRef.current?.getSampleRate()}
               />
 
               {isMonitoring && (

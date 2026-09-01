@@ -68,16 +68,24 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
   const [rangePreset, setRangePreset] = useState<FreqRangePreset>('full');
   const [showHarmonicGuides, setShowHarmonicGuides] = useState<boolean>(true);
   const [showPeakHold, setShowPeakHold] = useState<boolean>(true);
+  const [show5sPeakMarker, setShow5sPeakMarker] = useState<boolean>(true);
   const [showMitigationTips, setShowMitigationTips] = useState<boolean>(false);
 
   // Canvas and interaction refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const peakHoldBufferRef = useRef<Float32Array | null>(null);
+  const peak5sHistoryRef = useRef<Array<{ time: number; bin: number; freqHz: number; dbfs: number }>>([]);
 
   // Live telemetry states
   const [peakFreq, setPeakFreq] = useState<number>(0);
   const [peakMagnitudeDbfs, setPeakMagnitudeDbfs] = useState<number>(-100);
+  const [highest5sPeak, setHighest5sPeak] = useState<{
+    bin: number;
+    freqHz: number;
+    dbfs: number;
+    ageMs: number;
+  } | null>(null);
   const [spectralCentroidHz, setSpectralCentroidHz] = useState<number>(0);
   const [spectralFlatness, setSpectralFlatness] = useState<number>(0);
   const [detectedSources, setDetectedSources] = useState<DetectedInterference[]>([]);
@@ -85,6 +93,7 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
     freqHz: number;
     dbfs: number;
     nearestInterference?: string;
+    is5sPeak?: boolean;
   } | null>(null);
 
   // Frequency range bounds (in Hz)
@@ -95,11 +104,13 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
     return [20, Math.min(8000, nyquist)];
   }, [rangePreset, sampleRate]);
 
-  // Reset Peak Hold buffer
+  // Reset Peak Hold buffer & 5s Peak Frequency history
   const handleResetPeakHold = useCallback(() => {
     if (peakHoldBufferRef.current) {
       peakHoldBufferRef.current.fill(-100);
     }
+    peak5sHistoryRef.current = [];
+    setHighest5sPeak(null);
   }, []);
 
   // Main Canvas Rendering Loop
@@ -203,15 +214,60 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
         }
       };
 
-      // Bin index to Frequency in Hz
-      const binToFreq = (binIdx: number) => {
-        return (binIdx * currentSampleRate) / (binCount * 2);
+      const binToFreq = (binIndex: number) => {
+        return (binIndex * currentSampleRate) / (2 * binCount);
       };
 
-      // Frequency to Bin index
       const freqToBin = (freqHz: number) => {
-        return Math.round((freqHz * binCount * 2) / currentSampleRate);
+        const bin = Math.round((freqHz * 2 * binCount) / currentSampleRate);
+        return Math.max(0, Math.min(binCount - 1, bin));
       };
+
+      // 5-Second Rolling Peak Frequency Bin Accumulation
+      const currentTimeMs = Date.now();
+      const startBin = Math.max(1, freqToBin(minFreq));
+      const endBin = Math.min(binCount - 1, freqToBin(maxFreq));
+
+      if (isMonitoring) {
+        let frameMaxDb = -100;
+        let frameMaxBin = -1;
+        let frameHighestActiveBin = -1;
+
+        for (let b = startBin; b <= endBin; b++) {
+          const db = floatData[b];
+          if (db > frameMaxDb) {
+            frameMaxDb = db;
+            frameMaxBin = b;
+          }
+          // Consider active bin if above ambient floor or -75dBFS
+          if (db > Math.max(-75, ambientNoiseDbfs + 3)) {
+            frameHighestActiveBin = b;
+          }
+        }
+
+        const binToRecord = frameHighestActiveBin !== -1 ? frameHighestActiveBin : frameMaxBin;
+        if (binToRecord !== -1 && frameMaxDb > -85) {
+          peak5sHistoryRef.current.push({
+            time: currentTimeMs,
+            bin: binToRecord,
+            freqHz: binToFreq(binToRecord),
+            dbfs: floatData[binToRecord] ?? frameMaxDb,
+          });
+        }
+      }
+
+      // Prune history older than 5.0 seconds
+      peak5sHistoryRef.current = peak5sHistoryRef.current.filter(
+        (p) => currentTimeMs - p.time <= 5000
+      );
+
+      // Find the highest frequency bin reached in the last 5 seconds
+      let cur5sHighest: { time: number; bin: number; freqHz: number; dbfs: number } | null = null;
+      for (const item of peak5sHistoryRef.current) {
+        if (!cur5sHighest || item.bin > cur5sHighest.bin) {
+          cur5sHighest = item;
+        }
+      }
 
       // 1. Draw Grid Lines & Calibrated Y-Labels
       const dbTicks = [0, -20, -40, -60, -80, -100];
@@ -345,8 +401,6 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
       }
 
       // 5. Build Spectrum Curve Points
-      const startBin = Math.max(1, freqToBin(minFreq));
-      const endBin = Math.min(binCount - 1, freqToBin(maxFreq));
       const samplePoints: { x: number; y: number; dbfs: number; freq: number; bin: number }[] = [];
 
       // Determine horizontal step to prevent redundant canvas operations
@@ -417,10 +471,97 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
         ctx.stroke();
       }
 
+      // 8.5. Draw 5-Second Highest Frequency Bin Visual Peak Marker
+      if (
+        show5sPeakMarker &&
+        cur5sHighest &&
+        cur5sHighest.freqHz >= minFreq &&
+        cur5sHighest.freqHz <= maxFreq
+      ) {
+        const peakX = freqToX(cur5sHighest.freqHz);
+        const peakY = dbToY(cur5sHighest.dbfs);
+        const ageMs = currentTimeMs - cur5sHighest.time;
+        const remainingSec = Math.max(0, (5000 - ageMs) / 1000).toFixed(1);
+        const alphaRatio = Math.max(0.35, 1 - (ageMs / 5000) * 0.65);
+
+        ctx.save();
+
+        // (a) Vertical Illuminated Marker Beam
+        const beamGrad = ctx.createLinearGradient(0, padTop, 0, height - padBottom);
+        beamGrad.addColorStop(0, `rgba(255, 184, 0, ${0.95 * alphaRatio})`);
+        beamGrad.addColorStop(0.35, `rgba(255, 184, 0, ${0.65 * alphaRatio})`);
+        beamGrad.addColorStop(0.7, `rgba(255, 184, 0, ${0.25 * alphaRatio})`);
+        beamGrad.addColorStop(1, 'rgba(255, 184, 0, 0.02)');
+
+        ctx.strokeStyle = beamGrad;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 2]);
+        ctx.beginPath();
+        ctx.moveTo(peakX, padTop + 14);
+        ctx.lineTo(peakX, height - padBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // (b) Triangular Top Beacon Pointer
+        ctx.fillStyle = `rgba(255, 184, 0, ${0.95 * alphaRatio})`;
+        ctx.beginPath();
+        ctx.moveTo(peakX, padTop + 13);
+        ctx.lineTo(peakX - 4, padTop + 7);
+        ctx.lineTo(peakX + 4, padTop + 7);
+        ctx.closePath();
+        ctx.fill();
+
+        // (c) Top Floating Identification Pill Badge
+        const badgeLabel = `5s MAX: ${Math.round(cur5sHighest.freqHz)}Hz [BIN #${cur5sHighest.bin}] · ${remainingSec}s`;
+        ctx.font = 'bold 8.5px JetBrains Mono, monospace';
+        const badgeWidth = ctx.measureText(badgeLabel).width + 10;
+        let badgeLeft = peakX - badgeWidth / 2;
+        badgeLeft = Math.max(padLeft + 2, Math.min(width - padRight - badgeWidth - 2, badgeLeft));
+
+        ctx.fillStyle = 'rgba(8, 9, 12, 0.95)';
+        ctx.fillRect(badgeLeft, padTop - 4, badgeWidth, 12);
+        ctx.strokeStyle = `rgba(255, 184, 0, ${0.85 * alphaRatio})`;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(badgeLeft, padTop - 4, badgeWidth, 12);
+
+        ctx.fillStyle = '#FFB800';
+        ctx.textAlign = 'center';
+        ctx.fillText(badgeLabel, badgeLeft + badgeWidth / 2, padTop + 5);
+
+        // (d) Glowing Target Reticle on Spectrum Curve
+        ctx.shadowColor = '#FFB800';
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = '#FFB800';
+        ctx.beginPath();
+        ctx.arc(peakX, peakY, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Outer Reticle Ring
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.arc(peakX, peakY, 6.5, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
       // 9. Real-Time Interference Diagnostics & Peak Peak Analysis (throttled to 10 FPS for React state)
       const now = performance.now();
       if (now - lastDiagUpdateTime > 100) {
         lastDiagUpdateTime = now;
+
+        if (cur5sHighest) {
+          setHighest5sPeak({
+            bin: cur5sHighest.bin,
+            freqHz: Math.round(cur5sHighest.freqHz),
+            dbfs: Math.round(cur5sHighest.dbfs * 10) / 10,
+            ageMs: currentTimeMs - cur5sHighest.time,
+          });
+        } else {
+          setHighest5sPeak(null);
+        }
 
         let maxVal = -100;
         let maxValFreq = 0;
@@ -599,6 +740,7 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
     maxFreq,
     showHarmonicGuides,
     showPeakHold,
+    show5sPeakMarker,
     thresholdDbfs,
     ambientNoiseDbfs,
     voiceDetected,
@@ -655,10 +797,15 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
       }
     }
 
+    const isNear5s =
+      highest5sPeak &&
+      Math.abs(highest5sPeak.freqHz - freqHz) <= Math.max(15, freqHz * 0.05);
+
     setHoveredPoint({
       freqHz: Math.round(freqHz * 10) / 10,
       dbfs: Math.round(dbfs * 10) / 10,
       nearestInterference: matchText,
+      is5sPeak: Boolean(isNear5s),
     });
   };
 
@@ -796,6 +943,23 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
             <span className="hidden sm:inline">{t.harmonicMarkers}</span>
           </button>
 
+          {/* 5s Visual Peak Marker Toggle */}
+          <button
+            id="fft-toggle-5speak-btn"
+            type="button"
+            onClick={() => setShow5sPeakMarker((prev) => !prev)}
+            title={t.peak5sMarker}
+            className={`px-1.5 py-0.5 border text-[9px] flex items-center gap-1 transition-colors ${
+              show5sPeakMarker
+                ? 'bg-[#181B22] border-[#303440] text-[#FFB800]'
+                : 'bg-[#101114] border-[#202226] text-[#555862]'
+            }`}
+          >
+            <Activity className="w-2.5 h-2.5" />
+            <span className="hidden sm:inline">{t.peak5sMarker}</span>
+            <span className="sm:hidden">5s</span>
+          </button>
+
           {/* Peak Hold Toggle & Reset */}
           <div className="flex items-center gap-1">
             <button
@@ -814,7 +978,7 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
               id="fft-reset-peak-btn"
               type="button"
               onClick={handleResetPeakHold}
-              title="Reset Peak Hold Envelope"
+              title="Reset Peak Hold Envelope & 5s Peak Marker"
               className="p-1 bg-[#141518] hover:bg-[#202228] text-[#80828A] hover:text-[#FFB800] border border-[#202226] transition-colors"
             >
               <RotateCcw className="w-2.5 h-2.5" />
@@ -839,6 +1003,14 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
                 <span>{hoveredPoint.nearestInterference}</span>
               </div>
             )}
+            {hoveredPoint.is5sPeak && highest5sPeak && (
+              <div className="text-[#FFB800] font-bold text-[8.5px] flex items-center gap-1 border-t border-[#303440]/80 pt-0.5">
+                <Zap className="w-3 h-3 shrink-0" />
+                <span>
+                  {t.highestFreqBin}: #{highest5sPeak.bin} ({highest5sPeak.freqHz} Hz)
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -853,7 +1025,7 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
         />
 
         {/* Live Peak Reticle Overlay on Top Left */}
-        <div className="absolute left-14 top-2.5 pointer-events-none flex items-center gap-2.5 text-[8.5px] font-mono text-[#707480] bg-[#060709]/80 px-2 py-0.5 border border-[#181A20] z-10">
+        <div className="absolute left-14 top-2.5 pointer-events-none flex items-center gap-2.5 text-[8.5px] font-mono text-[#707480] bg-[#060709]/80 px-2 py-0.5 border border-[#181A20] z-10 flex-wrap">
           <span>
             {t.peakFrequency}:{' '}
             <span className="text-[#00F0FF] font-bold text-[9.5px]">
@@ -868,7 +1040,16 @@ export const FftSpectrumVisualizer: React.FC<FftSpectrumVisualizerProps> = ({
             </span>
           </span>
           <span className="text-[#303238]">|</span>
-          <span className="hidden md:inline">
+          <span>
+            <span className="text-[#FFB800] font-bold">{t.peak5sMaxFreq}: </span>
+            <span className="text-[#FFE066] font-bold">
+              {isMonitoring && highest5sPeak
+                ? `${highest5sPeak.freqHz} Hz (BIN #${highest5sPeak.bin})`
+                : '-- Hz'}
+            </span>
+          </span>
+          <span className="text-[#303238]">|</span>
+          <span className="hidden lg:inline">
             CENTROID:{' '}
             <span className="text-[#A0A2AA]">
               {isMonitoring ? `${spectralCentroidHz} Hz` : '-- Hz'}

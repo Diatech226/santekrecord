@@ -270,6 +270,9 @@ export class AudioProcessorEngine {
   // Ambient Noise Tracking
   private ambientNoiseFloor: number = -60;
 
+  // Automatic Gain Control (AGC) dynamic state
+  private currentAgcGain: number = 1.0;
+
   // Callbacks
   private onUpdateCallback?: (update: MonitorUpdate) => void;
   private onRecordingCompleteCallback?: (meta: RecordingMeta, blob: Blob) => void;
@@ -423,7 +426,7 @@ export class AudioProcessorEngine {
 
       const numChannels = e.inputBuffer.numberOfChannels;
       const ch0 = e.inputBuffer.getChannelData(0);
-      const gainMultiplier = this.settings.input_gain ?? 1.0;
+      const gainMultiplier = this.getEffectiveGain();
       const channelPref = this.settings.input_channel ?? 'auto';
 
       let chunk = new Float32Array(ch0.length);
@@ -558,6 +561,28 @@ export class AudioProcessorEngine {
       this.ambientNoiseFloor = this.ambientNoiseFloor * 0.96 + level_dbfs * 0.04;
     }
 
+    // Dynamic Automatic Gain Control (AGC) based on ambient noise floor measurements
+    if (this.settings.auto_gain_control) {
+      // Nominal reference ambient floor target is -48.0 dBFS for clear surveillance speech pickup
+      const targetNoiseFloorDbfs = -48.0;
+      const clampedAmbient = Math.max(-80, Math.min(-20, this.ambientNoiseFloor));
+      const rawDeltaDb = targetNoiseFloorDbfs - clampedAmbient; // e.g. -48 - (-64) = +16 dB
+      const idealGain = Math.max(0.5, Math.min(6.0, Math.pow(10, rawDeltaDb / 20)));
+
+      // Asymmetric smoothing: fast attack on loud input, smooth release on quiet ambient
+      if (idealGain < this.currentAgcGain) {
+        this.currentAgcGain = this.currentAgcGain * 0.85 + idealGain * 0.15;
+      } else {
+        this.currentAgcGain = this.currentAgcGain * 0.97 + idealGain * 0.03;
+      }
+
+      // Fast-acting limiter safeguard to prevent digital distortion / clipping if level exceeds -4 dBFS
+      if (level_dbfs > -4.0) {
+        const overDb = level_dbfs - (-4.0);
+        this.currentAgcGain = Math.max(0.5, this.currentAgcGain / Math.pow(10, overDb / 20));
+      }
+    }
+
     // Downsample chunk for real-time waveform visualization (128 points)
     const waveformLength = 128;
     const waveform: number[] = new Array(waveformLength);
@@ -688,6 +713,8 @@ export class AudioProcessorEngine {
         current_duration_sec: Math.round(current_duration_sec * 10) / 10,
         peak_dbfs: Math.round(level_dbfs * 10) / 10,
         ambient_noise_dbfs: Math.round(this.ambientNoiseFloor * 10) / 10,
+        effective_gain: Math.round(this.getEffectiveGain() * 10) / 10,
+        agc_active: Boolean(this.settings.auto_gain_control),
         waveform,
         spectrum,
       });
@@ -873,6 +900,13 @@ export class AudioProcessorEngine {
         });
       }, durationSec * 1000);
     });
+  }
+
+  public getEffectiveGain(): number {
+    if (this.settings.auto_gain_control) {
+      return this.currentAgcGain;
+    }
+    return this.settings.input_gain ?? 1.0;
   }
 
   public getAnalyserNode(): AnalyserNode | null {
