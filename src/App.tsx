@@ -85,7 +85,7 @@ export default function App() {
 
   // Dynamic Browser Tab Title Recording Indicator (Pulsing Red)
   useEffect(() => {
-    const isRecordingNow = status === 'recording' || status === 'voice_detected';
+    const isRecordingNow = status === 'recording' || status === 'voice_detected' || status === 'communication_active';
     
     if (isRecordingNow) {
       let pulse = false;
@@ -134,6 +134,7 @@ export default function App() {
           if (Array.isArray(update.waveform)) setLiveWaveform(update.waveform);
           if (Array.isArray(update.spectrum)) setSpectrum(update.spectrum);
           if (update.status) setStatus(update.status);
+          if (update.communication_duration_seconds !== undefined) setDurationSec(update.communication_duration_seconds);
           if (update.error_message) setErrorMessage(update.error_message);
         } catch {
           // ignore malformed ws messages
