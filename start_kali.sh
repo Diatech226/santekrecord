@@ -36,6 +36,17 @@ echo "[*] Installing Python dependencies..."
 pip install --upgrade pip
 pip install -r backend/requirements.txt
 
+# Fetch only during installation. Once present, startup and inference are offline.
+if [ ! -s backend/models/silero_vad.onnx ]; then
+    echo "[*] Installing pinned Silero VAD ONNX model..."
+    python3 scripts/install_silero_vad.py || true
+fi
+if [ -s backend/models/silero_vad.onnx ]; then
+    echo "[OK] Silero VAD model available"
+else
+    echo "[WARN] Silero VAD unavailable - acoustic fallback active"
+fi
+
 # 4. Install Node.js dependencies
 if [ ! -d "node_modules" ]; then
     echo "[*] Installing Frontend / Node dependencies..."

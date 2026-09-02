@@ -47,6 +47,17 @@ export const SettingsPanel: React.FC<Props> = ({
 
         {/* Detection Mode */}
         <div className="space-y-1.5">
+          <label htmlFor="detection-profile-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">Detection profile</label>
+          <select id="detection-profile-select" disabled={disabled}
+            value={settings.detection_profile ?? 'radio_room'}
+            onChange={(e) => onUpdateSettings({ detection_profile: e.target.value as 'general_voice' | 'radio_room' })}
+            className="w-full text-xs bg-[#151619] border border-[#2A2B2F] text-[#E0E0E0] rounded p-2 focus:outline-none focus:border-[#00F0FF] disabled:opacity-50">
+            <option value="general_voice">General Voice</option>
+            <option value="radio_room">Radio Room</option>
+          </select>
+        </div>
+
+        <div className="space-y-1.5">
           <label htmlFor="detection-mode-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">
             {t.triggerMode}
           </label>
