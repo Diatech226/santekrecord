@@ -43,6 +43,7 @@ class MainAudioEngine:
             self.config.vad_start_threshold, self.config.vad_stop_threshold,
             self.config.minimum_snr_db, self.config.minimum_speech_ms,
             frame_ms=1024 * 1000 / self.config.sample_rate,
+            profile=self.config.detection_profile,
         )
         self.recorder = AudioRecorderEngine(
             config=self.config,
@@ -75,6 +76,9 @@ class MainAudioEngine:
         self.current_spectral_change = 0.0
         self.current_radio_activity = False
         self.ambient_learning = False
+        self.ambient_learned_samples = 0
+        self.current_speech_candidate = False
+        self.current_speech_reject_reason = "vad_too_low"
 
         # Subscribers (e.g. WebSocket broadcast queues)
         self._listeners: List[Callable[[Dict[str, Any]], None]] = []
@@ -86,6 +90,10 @@ class MainAudioEngine:
     def subscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback not in self._listeners:
             self._listeners.append(callback)
+
+    def should_learn_ambient(self, speech_probability: float) -> bool:
+        """True only for audio explicitly classified as quiet calibration data."""
+        return speech_probability < self.config.ambient_learning_vad_max
 
     def unsubscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback in self._listeners:
@@ -192,6 +200,7 @@ class MainAudioEngine:
             speech_band_high_hz=self.config.speech_band_high_hz,
         )
         self.speech_detector.reset()
+        self.ambient_learned_samples = 0
         self.ambient_learning = self.config.adaptive_noise
         self.current_status = "learning_ambient" if self.ambient_learning else "listening"
         self._thread = threading.Thread(target=self._audio_loop, daemon=True)
@@ -290,8 +299,14 @@ class MainAudioEngine:
 
                 learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
                 if self.ambient_learning:
-                    self.noise_profile.update(dbfs, detection_spectrum)
-                    if self.frames_received >= learning_samples:
+                    # Calibration is measured in verified quiet audio, not wall time.
+                    if self.should_learn_ambient(speech_prob):
+                        self.noise_profile.update(dbfs, detection_spectrum)
+                        self.ambient_learned_samples += len(chunk)
+                    # Chunk boundaries may straddle the configured duration; one
+                    # analysis frame of tolerance avoids requiring a whole extra
+                    # quiet frame while still never learning a voice frame.
+                    if self.ambient_learned_samples >= max(0, learning_samples - len(chunk)):
                         self.ambient_learning = False
                         self.current_status = "listening"
                 noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
@@ -312,6 +327,10 @@ class MainAudioEngine:
                 self.current_spectral_change = round(noise_metrics.spectral_difference, 3)
                 self.current_ambient_spectrum = self.noise_profile.display_spectrum()
                 self.current_radio_activity = decision.radio_activity
+                self.current_speech_candidate = decision.is_candidate
+                self.current_speech_reject_reason = (
+                    "ambient_learning_active" if self.ambient_learning else decision.reject_reason
+                )
 
                 # 3. Process recorder state machine
                 status, voice_detected, is_recording = self.recorder.process_frame(
@@ -330,7 +349,9 @@ class MainAudioEngine:
                                        speech_prob < self.config.vad_stop_threshold and
                                        not decision.radio_activity),
                 )
-                self.current_status = "learning_ambient" if self.ambient_learning else status
+                self.current_status = (("calibration_paused_voice_present"
+                    if speech_prob >= self.config.ambient_learning_vad_max else "learning_ambient")
+                    if self.ambient_learning else status)
                 self.current_voice_detected = voice_detected
 
                 # 4. Rate-limited WebSocket broadcast (~8 Hz)
@@ -375,7 +396,12 @@ class MainAudioEngine:
             "spectral_change": self.current_spectral_change,
             "radio_activity": self.current_radio_activity,
             "ambient_learning": self.ambient_learning,
+            "ambient_learned_seconds": round(self.ambient_learned_samples / self.config.sample_rate, 3),
+            "ambient_learning_vad_max": self.config.ambient_learning_vad_max,
             "speech_probability": self.current_speech_prob,
+            "speech_candidate": self.current_speech_candidate,
+            "speech_reject_reason": self.current_speech_reject_reason,
+            "minimum_snr_db": self.speech_detector.minimum_snr,
             "voice_detected": self.current_voice_detected,
             "recording": self.recorder.is_recording,
             "status": self.current_status,

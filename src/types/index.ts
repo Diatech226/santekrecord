@@ -107,6 +107,7 @@ export interface AppSettings {
   adaptive_noise?: boolean;
   adaptive_threshold?: boolean;
   ambient_learning_seconds?: number;
+  ambient_learning_vad_max?: number;
   ambient_window_seconds?: number;
   noise_margin_db?: number;
   minimum_snr_db?: number;
@@ -148,6 +149,10 @@ export interface MonitorUpdate {
   vad_backend?: string;
   vad_model_loaded?: boolean;
   vad_error?: string | null;
+  speech_candidate?: boolean;
+  speech_reject_reason?: string;
+  minimum_snr_db?: number;
+  ambient_learned_seconds?: number;
   device_connected?: boolean;
   audio_frames_received?: boolean;
   frames_received?: number;
