@@ -75,6 +75,7 @@ class MainAudioEngine:
         self.current_speech_band_snr = 0.0
         self.current_spectral_change = 0.0
         self.current_radio_activity = False
+        self.current_radio_activity_score = 0.0
         self.ambient_learning = False
         self.ambient_learned_samples = 0
         self.current_speech_candidate = False
@@ -124,9 +125,16 @@ class MainAudioEngine:
         if callback not in self._listeners:
             self._listeners.append(callback)
 
-    def should_learn_ambient(self, speech_probability: float) -> bool:
+    def should_learn_ambient(self, speech_probability: float, decision=None,
+                             recording_active: bool | None = None) -> bool:
         """True only for audio explicitly classified as quiet calibration data."""
-        return speech_probability < self.config.ambient_learning_vad_max
+        if decision is None:
+            return speech_probability < self.config.ambient_learning_vad_max
+        return decision.ambient_update_allowed(
+            speech_probability,
+            self.recorder.is_recording if recording_active is None else recording_active,
+            self.config.ambient_learning_vad_max,
+        )
 
     def unsubscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback in self._listeners:
@@ -365,10 +373,20 @@ class MainAudioEngine:
                 speech_prob = self.vad_detector.get_speech_probability(chunk)
                 self.current_speech_prob = round(speech_prob, 2)
 
+                noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+                decision = self.speech_detector.process(
+                    speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
+                    noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
+                    noise_metrics.spectral_difference,
+                )
                 learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
                 if self.ambient_learning:
                     # Calibration is measured in verified quiet audio, not wall time.
-                    if self.should_learn_ambient(speech_prob):
+                    # An empty profile needs quiet bootstrap frames; a restored or
+                    # partially learned profile can also reject radio signatures.
+                    if ((self.noise_profile.frames_learned == 0
+                            and speech_prob < self.config.ambient_learning_vad_max)
+                            or self.should_learn_ambient(speech_prob, decision)):
                         self.noise_profile.update(dbfs, detection_spectrum)
                         self.ambient_learned_samples += len(chunk)
                     # Chunk boundaries may straddle the configured duration; one
@@ -380,14 +398,10 @@ class MainAudioEngine:
                         self._ambient_profile_dirty = True
                         self._save_ambient_profile_if_valid()
                 noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
-                decision = self.speech_detector.process(
-                    speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
-                    noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
-                    noise_metrics.spectral_difference,
-                )
                 # Never absorb probable voice or an active event into the room baseline.
-                if (self.config.adaptive_noise and not self.ambient_learning and speech_prob < .15
-                        and not self.recorder.is_recording and not decision.is_candidate):
+                if (self.config.adaptive_noise and not self.ambient_learning
+                        and decision.ambient_update_allowed(
+                            speech_prob, self.recorder.is_recording, .15)):
                     self.noise_profile.update(dbfs, detection_spectrum)
                     self._ambient_profile_dirty = True
                     noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
@@ -398,6 +412,7 @@ class MainAudioEngine:
                 self.current_spectral_change = round(noise_metrics.spectral_difference, 3)
                 self.current_ambient_spectrum = self.noise_profile.display_spectrum()
                 self.current_radio_activity = decision.radio_activity
+                self.current_radio_activity_score = decision.radio_activity_score
                 self.current_speech_candidate = decision.is_candidate
                 self.current_speech_reject_reason = (
                     "ambient_learning_active" if self.ambient_learning else decision.reject_reason
@@ -413,7 +428,11 @@ class MainAudioEngine:
                              "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
                              "snr_db": noise_metrics.broadband_snr_db,
                              "speech_band_snr_db": noise_metrics.speech_band_snr_db,
-                             "spectral_change": noise_metrics.spectral_difference},
+                             "spectral_change": noise_metrics.spectral_difference,
+                             "speech_probability": speech_prob,
+                             "speech_confirmed": decision.speech_confirmed,
+                             "radio_activity": decision.radio_activity,
+                             "radio_activity_score": decision.radio_activity_score},
                     vad_backend=self.vad_detector.vad_backend,
                     return_to_ambient=(noise_metrics.spectral_difference < self.config.ambient_return_spectral_threshold and
                                        noise_metrics.broadband_snr_db < self.config.minimum_snr_db and
@@ -466,6 +485,7 @@ class MainAudioEngine:
             "speech_band_snr_db": self.current_speech_band_snr,
             "spectral_change": self.current_spectral_change,
             "radio_activity": self.current_radio_activity,
+            "radio_activity_score": self.current_radio_activity_score,
             "ambient_learning": self.ambient_learning,
             "ambient_learned_seconds": round(self.ambient_learned_samples / self.config.sample_rate, 3),
             "ambient_learning_vad_max": self.config.ambient_learning_vad_max,

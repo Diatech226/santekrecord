@@ -68,3 +68,36 @@ def test_reject_reason_snr_low():
 def test_profile_switch_changes_detector_behavior():
     assert decide("general_voice", .72, 4).speech_confirmed
     assert not decide("radio_room", .72, 4).speech_confirmed
+
+
+def radio_decision(vad, snr, band_snr, spectral_change, frames=3):
+    detector = SpeechDetector(.65, .35, 6, 160, 64, profile="radio_room")
+    return [detector.process(vad, -35, -55, snr, band_snr, spectral_change)
+            for _ in range(frames)][-1]
+
+
+def test_radio_voice_can_be_speech_and_radio_activity_simultaneously():
+    decision = radio_decision(.92, 18, 16, .48)
+    assert decision.speech_confirmed is True
+    assert decision.radio_activity is True
+    assert decision.radio_activity_score >= .5
+
+
+def test_local_room_voice_is_speech_without_radio_activity():
+    decision = radio_decision(.92, 18, 14, .10)
+    assert decision.speech_confirmed is True
+    assert decision.radio_activity is False
+
+
+def test_radio_hiss_without_voice_is_radio_not_speech():
+    decision = radio_decision(.04, 16, 12, .55, frames=1)
+    assert decision.speech_confirmed is False
+    assert decision.radio_activity is True
+    assert decision.ambient_update_allowed(.04, recording_active=False) is False
+
+
+def test_true_room_ambient_is_neither_speech_nor_radio():
+    decision = radio_decision(.03, 1, 1, .02, frames=1)
+    assert decision.speech_confirmed is False
+    assert decision.radio_activity is False
+    assert decision.ambient_update_allowed(.03, recording_active=False) is True
