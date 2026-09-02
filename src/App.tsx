@@ -37,20 +37,21 @@ export default function App() {
     vad_threshold: 0.6,
     preroll_seconds: 1.0,
     silence_seconds: 2.0,
-    detection_profile: 'radio_room',
+    // Bootstrap values mirror config.json only until the backend response arrives.
+    detection_profile: 'general_voice',
     adaptive_noise: true,
     adaptive_threshold: true,
     ambient_learning_seconds: 5,
     ambient_learning_vad_max: .15,
     ambient_window_seconds: 20,
     noise_margin_db: 8,
-    minimum_snr_db: 6,
+    minimum_snr_db: 3,
     speech_band_low_hz: 250,
     speech_band_high_hz: 4000,
-    vad_start_threshold: .65,
-    vad_stop_threshold: .35,
-    minimum_speech_ms: 160,
-    minimum_total_speech_ms: 300,
+    vad_start_threshold: .5,
+    vad_stop_threshold: .3,
+    minimum_speech_ms: 120,
+    minimum_total_speech_ms: 250,
     transmission_hangover_seconds: 2,
     keep_internal_pause_ms: 1200,
     frequency_hz: 145000000,
@@ -169,6 +170,13 @@ export default function App() {
     return `${hours.toString().padStart(2, '0')}:${minutes
       .toString()
       .padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const formatProfileAge = (seconds?: number | null) => {
+    if (seconds === undefined || seconds === null) return '—';
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
   };
 
   // Load initial settings and devices
@@ -604,7 +612,24 @@ export default function App() {
                         <dt>Current RMS</dt><dd>{telemetry.level_dbfs?.toFixed(1)} dBFS</dd>
                         <dt>Peak</dt><dd>{telemetry.peak_dbfs?.toFixed(1) ?? '—'} dBFS</dd>
                         <dt>Last Frame</dt><dd>{telemetry.last_audio_frame_ms ?? '—'} ms</dd>
+                        <dt>Ambient Profile</dt><dd>{telemetry.ambient_profile_loaded ? 'Cached' : 'Learning'}</dd>
+                        <dt>Profile age</dt><dd>{formatProfileAge(telemetry.ambient_profile_age_seconds)}</dd>
+                        <dt>Detection Profile</dt><dd>{telemetry.detection_profile ?? settings.detection_profile}</dd>
+                        <dt>Effective VAD</dt><dd>{telemetry.effective_vad_start_threshold ?? '—'} / {telemetry.effective_vad_stop_threshold ?? '—'}</dd>
+                        <dt>Effective SNR</dt><dd>{telemetry.effective_minimum_snr_db ?? '—'} dB</dd>
                       </dl>
+                      <button type="button" className="mt-3 w-full py-1 border border-[#00F0FF]/40 text-[#00F0FF] uppercase"
+                        onClick={async () => {
+                          try {
+                            const update = await api.resetAmbientProfile();
+                            setTelemetry(update);
+                            if (update.status) setStatus(update.status);
+                          } catch (error) {
+                            setErrorMessage(error instanceof Error ? error.message : 'Ambient reset failed');
+                          }
+                        }}>
+                        Recalibrate Ambient
+                      </button>
                     </details>
                   )}
                 </div>

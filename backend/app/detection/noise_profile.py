@@ -93,3 +93,45 @@ class AdaptiveNoiseProfile:
         indices = np.linspace(0, len(self.noise_spectrum) - 1, bins).astype(int)
         db = 10 * np.log10(np.maximum(self.noise_spectrum[indices], 1e-10))
         return np.clip((db + 100) / 100, 0, 1).round(5).tolist()
+
+    def export_profile(self):
+        """Return the stable ambient baseline without exposing private state."""
+        return {
+            "version": self.VERSION,
+            "sample_rate": self.sample_rate,
+            "fft_size": self.fft_size,
+            "noise_floor_dbfs": self.noise_floor_dbfs,
+            "noise_variance_db": self.noise_variance_db,
+            "noise_spectrum": self.noise_spectrum.tolist(),
+            "mean_spectrum": self.mean_spectrum.tolist(),
+            "frames_learned": self.frames_learned,
+        }
+
+    def load_profile(self, data):
+        """Load a compatible exported baseline, returning False for stale data."""
+        try:
+            noise = np.asarray(data["noise_spectrum"], dtype=np.float32)
+            mean = np.asarray(data["mean_spectrum"], dtype=np.float32)
+            compatible = (
+                data.get("version") == self.VERSION
+                and int(data["sample_rate"]) == self.sample_rate
+                and int(data["fft_size"]) == self.fft_size
+                and noise.shape == self.noise_spectrum.shape
+                and mean.shape == self.mean_spectrum.shape
+                and int(data.get("frames_learned", 0)) > 0
+                and np.all(np.isfinite(noise)) and np.all(np.isfinite(mean))
+            )
+            if not compatible:
+                return False
+            self.noise_floor_dbfs = float(data["noise_floor_dbfs"])
+            self.noise_variance_db = float(data.get("noise_variance_db", 0.0))
+            self.noise_spectrum = noise
+            self.mean_spectrum = mean
+            self.frames_learned = int(data["frames_learned"])
+            # Seed rolling history so the first background update cannot replace
+            # a mature cached profile with one frame.
+            self._levels.append(self.noise_floor_dbfs)
+            self._spectra.append(self.noise_spectrum.copy())
+            return True
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False

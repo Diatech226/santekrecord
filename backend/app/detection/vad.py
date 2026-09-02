@@ -76,6 +76,16 @@ class SileroVADDetector:
             self._recent.append(max(probabilities))
         return float(np.mean(self._recent)) if self._recent else 0.0
 
+    def reset(self):
+        """Clear all streaming/recurrent state between monitoring sessions."""
+        self._pending = np.empty(0, dtype=np.float32)
+        self._recent.clear()
+        self._onnx_state = np.zeros((2, 1, 128), dtype=np.float32)
+        if self.model is not None:
+            reset_states = getattr(self.model, "reset_states", None)
+            if callable(reset_states):
+                reset_states()
+
     def _infer_frame(self, frame):
         if self._onnx_session is not None:
             try:

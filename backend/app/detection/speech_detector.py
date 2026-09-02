@@ -51,6 +51,7 @@ class SpeechDetector:
         self.start = vad_start_threshold
         self.continue_ = vad_continue_threshold
         self.minimum_snr = minimum_snr_db
+        self.minimum_speech_ms = minimum_speech_ms
         self.required = max(2, int(round(minimum_speech_ms / frame_ms)))
         self.hits = deque(maxlen=self.required)
         self.active = False

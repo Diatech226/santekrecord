@@ -14,6 +14,7 @@ from ..detection.rms import RMSDetector
 from ..detection.vad import SileroVADDetector
 from ..detection.noise_profile import AdaptiveNoiseProfile
 from ..detection.speech_detector import SpeechDetector
+from ..detection.ambient_profile_store import AmbientProfileStore
 from ..recording.recorder import AudioRecorderEngine
 from ..recording.metadata import RecordingMetadata
 from ..config.settings import AppConfig, load_config
@@ -26,25 +27,24 @@ class MainAudioEngine:
     metrics via WebSocket callbacks.
     """
 
-    def __init__(self, config: Optional[AppConfig] = None, recordings_dir: str = "recordings"):
+    def __init__(self, config: Optional[AppConfig] = None, recordings_dir: str = "recordings",
+                 ambient_profiles_dir: str = "data/ambient_profiles"):
         self.config = config or load_config()
         self.recordings_dir = recordings_dir
 
         self.source: Optional[AudioSource] = None
         self.rms_detector = RMSDetector()
-        self.vad_detector = SileroVADDetector(sample_rate=self.config.sample_rate)
-        self.noise_profile = AdaptiveNoiseProfile(
-            self.config.sample_rate, window_seconds=self.config.ambient_window_seconds,
-            noise_margin_db=self.config.noise_margin_db,
-            speech_band_low_hz=self.config.speech_band_low_hz,
-            speech_band_high_hz=self.config.speech_band_high_hz,
-        )
-        self.speech_detector = SpeechDetector(
-            self.config.vad_start_threshold, self.config.vad_stop_threshold,
-            self.config.minimum_snr_db, self.config.minimum_speech_ms,
-            frame_ms=1024 * 1000 / self.config.sample_rate,
-            profile=self.config.detection_profile,
-        )
+        self.ambient_profile_store = AmbientProfileStore(ambient_profiles_dir)
+        self.vad_detector = None
+        self.noise_profile = None
+        self.speech_detector = None
+        self._configure_detection_pipeline(force_vad=True)
+        self.ambient_profile_loaded = False
+        self.ambient_profile_age_seconds: Optional[float] = None
+        self.ambient_profile_source = "learning"
+        self._ambient_profile_dirty = False
+        self._ambient_profile_saved = False
+        self._ambient_device_name: Optional[str] = None
         self.recorder = AudioRecorderEngine(
             config=self.config,
             recordings_dir=self.recordings_dir,
@@ -87,6 +87,39 @@ class MainAudioEngine:
         self._is_calibrating = False
         self._calibration_levels: List[float] = []
 
+    def _new_noise_profile(self):
+        return AdaptiveNoiseProfile(
+            self.config.sample_rate, window_seconds=self.config.ambient_window_seconds,
+            noise_margin_db=self.config.noise_margin_db,
+            speech_band_low_hz=self.config.speech_band_low_hz,
+            speech_band_high_hz=self.config.speech_band_high_hz,
+        )
+
+    def _configure_detection_pipeline(self, force_vad=False):
+        """Synchronize every stateful detector with the current AppConfig."""
+        if force_vad or self.vad_detector is None or self.vad_detector.sample_rate != self.config.sample_rate:
+            self.vad_detector = SileroVADDetector(sample_rate=self.config.sample_rate)
+        self.noise_profile = self._new_noise_profile()
+        self.speech_detector = SpeechDetector(
+            self.config.vad_start_threshold, self.config.vad_stop_threshold,
+            self.config.minimum_snr_db, self.config.minimum_speech_ms,
+            frame_ms=1024 * 1000 / self.config.sample_rate,
+            profile=self.config.detection_profile,
+        )
+
+    def get_effective_detection_config(self):
+        return {
+            "detection_profile": self.speech_detector.profile.name,
+            "configured_vad_start_threshold": self.config.vad_start_threshold,
+            "configured_vad_stop_threshold": self.config.vad_stop_threshold,
+            "configured_minimum_snr_db": self.config.minimum_snr_db,
+            "configured_minimum_speech_ms": self.config.minimum_speech_ms,
+            "effective_vad_start_threshold": self.speech_detector.start,
+            "effective_vad_stop_threshold": self.speech_detector.continue_,
+            "effective_minimum_snr_db": self.speech_detector.minimum_snr,
+            "effective_minimum_speech_ms": self.speech_detector.minimum_speech_ms,
+        }
+
     def subscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback not in self._listeners:
             self._listeners.append(callback)
@@ -114,11 +147,14 @@ class MainAudioEngine:
         })
 
     def update_config(self, new_config: AppConfig):
+        was_running = self._is_running
+        if was_running:
+            # Save/stop using the old identity before replacing the config.
+            self.stop()
         self.config = new_config
         self.recorder.update_config(new_config)
-        if self._is_running:
-            # Recreate audio source if source type changed
-            self.stop()
+        self._configure_detection_pipeline()
+        if was_running:
             self.start()
 
     def _create_source(self) -> AudioSource:
@@ -193,15 +229,18 @@ class MainAudioEngine:
         self.started_at = time.time()
         self.frames_received = 0
         self.last_audio_frame_at = None
-        self.noise_profile = AdaptiveNoiseProfile(
-            self.config.sample_rate, window_seconds=self.config.ambient_window_seconds,
-            noise_margin_db=self.config.noise_margin_db,
-            speech_band_low_hz=self.config.speech_band_low_hz,
-            speech_band_high_hz=self.config.speech_band_high_hz,
-        )
+        self.noise_profile = self._new_noise_profile()
+        self.vad_detector.reset()
         self.speech_detector.reset()
         self.ambient_learned_samples = 0
-        self.ambient_learning = self.config.adaptive_noise
+        self._ambient_device_name = getattr(self.source, "device_name", None) or self.config.device_name
+        cached = self.ambient_profile_store.load(self.config, self._ambient_device_name)
+        self.ambient_profile_loaded = bool(cached and self.noise_profile.load_profile(cached["profile"]))
+        self.ambient_profile_age_seconds = cached["age_seconds"] if self.ambient_profile_loaded else None
+        self.ambient_profile_source = "cached" if self.ambient_profile_loaded else "learning"
+        self._ambient_profile_dirty = False
+        self._ambient_profile_saved = self.ambient_profile_loaded
+        self.ambient_learning = self.config.adaptive_noise and not self.ambient_profile_loaded
         self.current_status = "learning_ambient" if self.ambient_learning else "listening"
         self._thread = threading.Thread(target=self._audio_loop, daemon=True)
         self._thread.start()
@@ -221,6 +260,8 @@ class MainAudioEngine:
             self._thread.join(timeout=1.0)
             self._thread = None
 
+        self._save_ambient_profile_if_valid()
+
         self.source = None
 
         self.recorder.stop_and_flush()
@@ -231,6 +272,33 @@ class MainAudioEngine:
 
         self._broadcast(self.get_telemetry())
         print("[MainAudioEngine] Audio engine stopped.")
+
+    def _save_ambient_profile_if_valid(self):
+        if (self.config.adaptive_noise and not self.ambient_learning
+                and self.noise_profile.frames_learned > 0
+                and (self._ambient_profile_dirty or not self._ambient_profile_saved)):
+            try:
+                self.ambient_profile_store.save(
+                    self.config, self.noise_profile, self._ambient_device_name)
+                self._ambient_profile_dirty = False
+                self._ambient_profile_saved = True
+            except OSError as exc:
+                print(f"[AMBIENT PROFILE] Save failed: {exc}")
+
+    def reset_ambient_profile(self):
+        """Forget this input's baseline and force verified quiet relearning."""
+        deleted = self.ambient_profile_store.delete(self.config, self._ambient_device_name)
+        self.noise_profile = self._new_noise_profile()
+        self.ambient_profile_loaded = False
+        self.ambient_profile_age_seconds = None
+        self.ambient_profile_source = "learning"
+        self._ambient_profile_dirty = False
+        self._ambient_profile_saved = False
+        self.ambient_learned_samples = 0
+        self.ambient_learning = bool(self.config.adaptive_noise)
+        if self._is_running:
+            self.current_status = "learning_ambient" if self.ambient_learning else "listening"
+        return deleted
 
     def _audio_loop(self):
         last_broadcast_time = 0.0
@@ -309,6 +377,8 @@ class MainAudioEngine:
                     if self.ambient_learned_samples >= max(0, learning_samples - len(chunk)):
                         self.ambient_learning = False
                         self.current_status = "listening"
+                        self._ambient_profile_dirty = True
+                        self._save_ambient_profile_if_valid()
                 noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
                 decision = self.speech_detector.process(
                     speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
@@ -319,6 +389,7 @@ class MainAudioEngine:
                 if (self.config.adaptive_noise and not self.ambient_learning and speech_prob < .15
                         and not self.recorder.is_recording and not decision.is_candidate):
                     self.noise_profile.update(dbfs, detection_spectrum)
+                    self._ambient_profile_dirty = True
                     noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
                 self.noise_floor_dbfs = round(noise_metrics.noise_floor_dbfs, 1)
                 self.current_dynamic_threshold = round(noise_metrics.dynamic_threshold_dbfs, 1)
@@ -398,6 +469,11 @@ class MainAudioEngine:
             "ambient_learning": self.ambient_learning,
             "ambient_learned_seconds": round(self.ambient_learned_samples / self.config.sample_rate, 3),
             "ambient_learning_vad_max": self.config.ambient_learning_vad_max,
+            "ambient_profile_loaded": self.ambient_profile_loaded,
+            "ambient_profile_age_seconds": self.ambient_profile_age_seconds,
+            "ambient_profile_key": self.ambient_profile_store.key(
+                self.config, self._ambient_device_name),
+            "ambient_profile_source": self.ambient_profile_source,
             "speech_probability": self.current_speech_prob,
             "speech_candidate": self.current_speech_candidate,
             "speech_reject_reason": self.current_speech_reject_reason,
@@ -431,6 +507,7 @@ class MainAudioEngine:
             "waveform": self.current_waveform,
             "spectrum": self.current_spectrum,
             "ambient_spectrum": self.current_ambient_spectrum,
+            **self.get_effective_detection_config(),
             **self.recorder.session_telemetry(),
             **self.vad_detector.diagnostics(),
         }

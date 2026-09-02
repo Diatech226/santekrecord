@@ -406,6 +406,17 @@ def stop_monitoring(engine=Depends(get_engine)):
     return {"success": True, "message": "Monitoring stopped"}
 
 
+@router.delete("/audio/ambient-profile")
+def reset_ambient_profile(engine=Depends(get_engine)):
+    deleted = engine.reset_ambient_profile()
+    return {
+        "success": True,
+        "deleted": deleted,
+        "message": "Ambient profile cleared; quiet calibration restarted",
+        **engine.get_telemetry(),
+    }
+
+
 @router.post("/audio/test")
 def test_input(device_id: Optional[int | str] = None, source_type: str = "microphone", engine=Depends(get_engine)):
     """Open the selected hardware independently and report real samples for 3 seconds."""

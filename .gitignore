@@ -16,3 +16,5 @@ evaluation_results/*
 
 __pycache__/
 *.py[cod]
+data/ambient_profiles/*.json
+data/ambient_profiles/*.npz
