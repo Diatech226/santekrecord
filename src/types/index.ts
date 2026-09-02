@@ -5,10 +5,16 @@ export type DetectionMode = 'db_vad' | 'db_only' | 'vad_only';
 export type EngineStatus =
   | 'idle'
   | 'opening'
+  | 'learning_ambient'
   | 'listening'
+  | 'signal_candidate'
+  | 'voice_confirmed'
   | 'voice_detected'
   | 'recording'
   | 'silence'
+  | 'hangover'
+  | 'finalizing'
+  | 'trimming'
   | 'saving'
   | 'error';
 
@@ -87,6 +93,21 @@ export interface AppSettings {
   input_channel?: 'auto' | 'channel_1' | 'channel_2';
   // Automatic Gain Control (AGC) based on ambient noise floor measurements
   auto_gain_control?: boolean;
+  detection_profile?: 'radio_room' | 'general_voice';
+  adaptive_noise?: boolean;
+  adaptive_threshold?: boolean;
+  ambient_learning_seconds?: number;
+  ambient_window_seconds?: number;
+  noise_margin_db?: number;
+  minimum_snr_db?: number;
+  speech_band_low_hz?: number;
+  speech_band_high_hz?: number;
+  vad_start_threshold?: number;
+  vad_stop_threshold?: number;
+  minimum_speech_ms?: number;
+  minimum_total_speech_ms?: number;
+  transmission_hangover_seconds?: number;
+  keep_internal_pause_ms?: number;
   // HackRF / GNU Radio specific
   frequency_hz?: number;
   modulation?: string;
@@ -107,6 +128,16 @@ export interface MonitorUpdate {
   rms_dbfs?: number;
   noise_floor_dbfs?: number;
   threshold_dbfs?: number;
+  dynamic_threshold_dbfs?: number;
+  snr_db?: number;
+  speech_band_snr_db?: number;
+  spectral_change?: number;
+  radio_activity?: boolean;
+  ambient_learning?: boolean;
+  ambient_spectrum?: number[];
+  vad_backend?: string;
+  vad_model_loaded?: boolean;
+  vad_error?: string | null;
   device_connected?: boolean;
   audio_frames_received?: boolean;
   frames_received?: number;

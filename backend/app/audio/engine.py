@@ -12,6 +12,8 @@ from .gnuradio import GNURadioSource
 from .alsa import ALSAArecordSource, match_alsa_device
 from ..detection.rms import RMSDetector
 from ..detection.vad import SileroVADDetector
+from ..detection.noise_profile import AdaptiveNoiseProfile
+from ..detection.speech_detector import SpeechDetector
 from ..recording.recorder import AudioRecorderEngine
 from ..recording.metadata import RecordingMetadata
 from ..config.settings import AppConfig, load_config
@@ -31,6 +33,17 @@ class MainAudioEngine:
         self.source: Optional[AudioSource] = None
         self.rms_detector = RMSDetector()
         self.vad_detector = SileroVADDetector(sample_rate=self.config.sample_rate)
+        self.noise_profile = AdaptiveNoiseProfile(
+            self.config.sample_rate, window_seconds=self.config.ambient_window_seconds,
+            noise_margin_db=self.config.noise_margin_db,
+            speech_band_low_hz=self.config.speech_band_low_hz,
+            speech_band_high_hz=self.config.speech_band_high_hz,
+        )
+        self.speech_detector = SpeechDetector(
+            self.config.vad_start_threshold, self.config.vad_stop_threshold,
+            self.config.minimum_snr_db, self.config.minimum_speech_ms,
+            frame_ms=1024 * 1000 / self.config.sample_rate,
+        )
         self.recorder = AudioRecorderEngine(
             config=self.config,
             recordings_dir=self.recordings_dir,
@@ -55,6 +68,13 @@ class MainAudioEngine:
         self.effective_gain = 1.0
         self.current_waveform: List[float] = [0.0] * 128
         self.current_spectrum: List[float] = [0.0] * 64
+        self.current_ambient_spectrum: List[float] = [0.0] * 64
+        self.current_dynamic_threshold = self.config.threshold_dbfs
+        self.current_snr = 0.0
+        self.current_speech_band_snr = 0.0
+        self.current_spectral_change = 0.0
+        self.current_radio_activity = False
+        self.ambient_learning = False
 
         # Subscribers (e.g. WebSocket broadcast queues)
         self._listeners: List[Callable[[Dict[str, Any]], None]] = []
@@ -165,7 +185,15 @@ class MainAudioEngine:
         self.started_at = time.time()
         self.frames_received = 0
         self.last_audio_frame_at = None
-        self.current_status = "listening"
+        self.noise_profile = AdaptiveNoiseProfile(
+            self.config.sample_rate, window_seconds=self.config.ambient_window_seconds,
+            noise_margin_db=self.config.noise_margin_db,
+            speech_band_low_hz=self.config.speech_band_low_hz,
+            speech_band_high_hz=self.config.speech_band_high_hz,
+        )
+        self.speech_detector.reset()
+        self.ambient_learning = self.config.adaptive_noise
+        self.current_status = "learning_ambient" if self.ambient_learning else "listening"
         self._thread = threading.Thread(target=self._audio_loop, daemon=True)
         self._thread.start()
         print(f"[MainAudioEngine] Started audio engine on source: {self.config.source}")
@@ -220,8 +248,8 @@ class MainAudioEngine:
                     time.sleep(0.01)
                     continue
 
-                # Gain is applied once, here, so meters, charts, VAD and saved WAV
-                # all describe exactly the same samples.
+                # Split paths: archive remains the captured signal; gain is detection-only.
+                raw_chunk = np.asarray(chunk, dtype=np.float32).copy()
                 if self.config.auto_gain_control:
                     raw_rms, raw_dbfs = self.rms_detector.process_chunk(chunk)
                     target_gain = 10 ** ((-30.0 - raw_dbfs) / 20.0) if raw_rms > 0 else 1.0
@@ -229,7 +257,7 @@ class MainAudioEngine:
                     self.effective_gain = 0.9 * self.effective_gain + 0.1 * target_gain
                 else:
                     self.effective_gain = self.config.input_gain
-                chunk = np.clip(chunk * self.effective_gain, -1.0, 1.0).astype(np.float32)
+                chunk = np.clip(raw_chunk * self.effective_gain, -1.0, 1.0).astype(np.float32)
 
                 # Preserve real processed samples for the realtime chart.
                 indices = np.linspace(0, len(chunk) - 1, 128).astype(int)
@@ -239,6 +267,7 @@ class MainAudioEngine:
                 spectrum_db = 20 * np.log10(np.maximum(magnitudes, 1e-5))
                 spectrum_indices = np.linspace(0, len(spectrum_db) - 1, 64).astype(int)
                 self.current_spectrum = np.clip((spectrum_db[spectrum_indices] + 100) / 100, 0, 1).round(5).tolist()
+                detection_spectrum = self.noise_profile.spectrum(chunk)
 
                 # 1. Compute RMS & dBFS
                 rms, dbfs = self.rms_detector.process_chunk(chunk)
@@ -251,10 +280,7 @@ class MainAudioEngine:
                     print(f"[AUDIO ENGINE] frames_received={self.frames_received} processing_rate={self.config.sample_rate} level={self.current_level_dbfs:.1f}")
                 if self.current_error == "No audio callback received for 2 seconds":
                     self.current_error = None
-                self._noise_levels.append(dbfs)
-                self.noise_floor_dbfs = round(float(np.percentile(self._noise_levels, 20)), 1)
-
-                # Calibration accumulation
+                # Calibration accumulation (legacy API remains available).
                 if self._is_calibrating:
                     self._calibration_levels.append(dbfs)
 
@@ -262,11 +288,44 @@ class MainAudioEngine:
                 speech_prob = self.vad_detector.get_speech_probability(chunk)
                 self.current_speech_prob = round(speech_prob, 2)
 
+                learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
+                if self.ambient_learning:
+                    self.noise_profile.update(dbfs, detection_spectrum)
+                    if self.frames_received >= learning_samples:
+                        self.ambient_learning = False
+                        self.current_status = "listening"
+                noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+                decision = self.speech_detector.process(
+                    speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
+                    noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
+                    noise_metrics.spectral_difference,
+                )
+                # Never absorb probable voice or an active event into the room baseline.
+                if (self.config.adaptive_noise and not self.ambient_learning and speech_prob < .15
+                        and not self.recorder.is_recording and not decision.is_candidate):
+                    self.noise_profile.update(dbfs, detection_spectrum)
+                    noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+                self.noise_floor_dbfs = round(noise_metrics.noise_floor_dbfs, 1)
+                self.current_dynamic_threshold = round(noise_metrics.dynamic_threshold_dbfs, 1)
+                self.current_snr = round(noise_metrics.broadband_snr_db, 1)
+                self.current_speech_band_snr = round(noise_metrics.speech_band_snr_db, 1)
+                self.current_spectral_change = round(noise_metrics.spectral_difference, 3)
+                self.current_ambient_spectrum = self.noise_profile.display_spectrum()
+                self.current_radio_activity = decision.radio_activity
+
                 # 3. Process recorder state machine
                 status, voice_detected, is_recording = self.recorder.process_frame(
-                    chunk, self.current_level_dbfs, self.current_speech_prob
+                    raw_chunk, self.current_level_dbfs, self.current_speech_prob,
+                    speech_confirmed=(False if self.ambient_learning else decision.speech_confirmed),
+                    candidate=decision.is_candidate, radio_activity=decision.radio_activity,
+                    confidence=decision.confidence,
+                    metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
+                             "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
+                             "snr_db": noise_metrics.broadband_snr_db,
+                             "speech_band_snr_db": noise_metrics.speech_band_snr_db},
+                    vad_backend=self.vad_detector.vad_backend,
                 )
-                self.current_status = status
+                self.current_status = "learning_ambient" if self.ambient_learning else status
                 self.current_voice_detected = voice_detected
 
                 # 4. Rate-limited WebSocket broadcast (~8 Hz)
@@ -305,6 +364,12 @@ class MainAudioEngine:
             "peak_dbfs": self.current_peak_dbfs,
             "noise_floor_dbfs": self.noise_floor_dbfs,
             "threshold_dbfs": self.config.threshold_dbfs,
+            "dynamic_threshold_dbfs": self.current_dynamic_threshold,
+            "snr_db": self.current_snr,
+            "speech_band_snr_db": self.current_speech_band_snr,
+            "spectral_change": self.current_spectral_change,
+            "radio_activity": self.current_radio_activity,
+            "ambient_learning": self.ambient_learning,
             "speech_probability": self.current_speech_prob,
             "voice_detected": self.current_voice_detected,
             "recording": self.recorder.is_recording,
@@ -334,6 +399,8 @@ class MainAudioEngine:
             "agc_active": self.config.auto_gain_control,
             "waveform": self.current_waveform,
             "spectrum": self.current_spectrum,
+            "ambient_spectrum": self.current_ambient_spectrum,
+            **self.vad_detector.diagnostics(),
         }
 
     def restart(self) -> bool:

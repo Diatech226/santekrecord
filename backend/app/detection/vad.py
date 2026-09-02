@@ -1,90 +1,84 @@
+"""Deterministic, offline-first Silero VAD adapter."""
+from collections import deque
+from pathlib import Path
 import os
-from typing import Optional
 import numpy as np
 
-# Try importing PyTorch for Silero VAD
 try:
     import torch
-    TORCH_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - depends on installation
     torch = None
-    TORCH_AVAILABLE = False
 
 
 class SileroVADDetector:
-    """
-    Voice Activity Detection using Silero VAD model (16kHz mono).
-    Returns speech_probability between 0.00 and 1.00.
-    Includes acoustic fallback if PyTorch or internet is unavailable in offline Kali environments.
-    """
+    """Feeds Silero its documented 512-sample frames at 16 kHz.
 
-    def __init__(self, sample_rate: int = 16000):
+    Model loading never initiates a network request.  Put a torch-hub checkout in
+    its normal cache or set ``SILERO_VAD_REPO`` during installation.
+    """
+    frame_samples = 512
+
+    def __init__(self, sample_rate=16000):
         self.sample_rate = sample_rate
         self.model = None
-        self._utils = None
+        self.vad_backend = "acoustic_fallback"
+        self.vad_model_loaded = False
+        self.vad_error = None
+        self._pending = np.empty(0, dtype=np.float32)
+        self._recent = deque(maxlen=3)
         self._init_model()
 
     def _init_model(self):
-        if TORCH_AVAILABLE and torch is not None:
-            try:
-                # Load Silero VAD from torch hub with local caching
-                self.model, self._utils = torch.hub.load(
-                    repo_or_dir="snakers4/silero-vad",
-                    model="silero_vad",
-                    force_reload=False,
-                    onnx=False,
-                    trust_repo=True,
-                )
-                self.model.eval()
-                print("[VAD] Silero VAD initialized successfully via PyTorch.")
-            except Exception as e:
-                print(f"[VAD] Note: Silero VAD online download not available ({e}). Using optimized acoustic formant fallback.")
-                self.model = None
+        if torch is None:
+            self.vad_error = "PyTorch is not installed; using acoustic fallback"
+            return
+        repo = os.environ.get("SILERO_VAD_REPO")
+        if not repo:
+            hub = Path(torch.hub.get_dir())
+            candidates = sorted(hub.glob("snakers4_silero-vad*"))
+            repo = str(candidates[-1]) if candidates else None
+        if not repo or not Path(repo).exists():
+            self.vad_error = "Silero cache not found (offline fallback active)"
+            return
+        try:
+            self.model, _ = torch.hub.load(repo_or_dir=repo, model="silero_vad", source="local", onnx=False)
+            self.model.eval()
+            self.vad_backend, self.vad_model_loaded = "silero", True
+        except Exception as exc:
+            self.vad_error = f"Silero load failed: {type(exc).__name__}: {exc}"
 
-    def get_speech_probability(self, chunk: np.ndarray) -> float:
-        """
-        Process audio chunk and return speech probability (0.00 - 1.00).
-        """
-        if len(chunk) == 0:
-            return 0.0
+    def get_speech_probability(self, chunk):
+        chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
+        if not len(chunk): return 0.0
+        self._pending = np.concatenate((self._pending, chunk))
+        probabilities = []
+        while len(self._pending) >= self.frame_samples:
+            frame, self._pending = self._pending[:self.frame_samples], self._pending[self.frame_samples:]
+            probabilities.append(self._infer_frame(frame))
+        if probabilities:
+            self._recent.append(max(probabilities))
+        return float(np.mean(self._recent)) if self._recent else 0.0
 
-        # If PyTorch model is loaded
-        if self.model is not None and TORCH_AVAILABLE and torch is not None:
+    def _infer_frame(self, frame):
+        if self.model is not None:
             try:
-                tensor = torch.from_numpy(chunk.astype(np.float32))
                 with torch.no_grad():
-                    speech_prob = self.model(tensor, self.sample_rate).item()
-                    return float(np.clip(speech_prob, 0.0, 1.0))
-            except Exception:
-                pass
+                    return float(np.clip(self.model(torch.from_numpy(frame), self.sample_rate).item(), 0, 1))
+            except Exception as exc:
+                self.vad_error = f"Silero inference failed: {type(exc).__name__}: {exc}"
+                self.model, self.vad_model_loaded, self.vad_backend = None, False, "acoustic_fallback"
+        return self._acoustic_vad_fallback(frame)
 
-        # Robust acoustic formant & zero-crossing rate fallback
-        return self._acoustic_vad_fallback(chunk)
+    def _acoustic_vad_fallback(self, chunk):
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        if rms < .003: return 0.0
+        windowed = chunk * np.hanning(len(chunk))
+        power = np.abs(np.fft.rfft(windowed)) ** 2
+        freqs = np.fft.rfftfreq(len(chunk), 1 / self.sample_rate)
+        ratio = float(power[(freqs >= 250) & (freqs <= 4000)].sum() / (power.sum() + 1e-12))
+        zcr = float(np.mean(np.diff(np.signbit(chunk))))
+        zcr_score = max(0., 1. - abs(zcr - .12) / .16)
+        return float(np.clip(.55 * ratio + .30 * zcr_score + .15 * min(1., rms * 20), 0, .92))
 
-    def _acoustic_vad_fallback(self, chunk: np.ndarray) -> float:
-        """
-        Acoustic voice activity estimator analyzing formant frequency band and zero crossings.
-        """
-        rms = np.sqrt(np.mean(chunk ** 2))
-        if rms < 0.003:
-            return 0.0
-
-        # Zero crossing rate
-        zcr = np.mean(np.abs(np.diff(np.signbit(chunk))))
-        
-        # Spectral energy in human voice formant band (approx 300Hz - 3400Hz)
-        # Using autocorrelation and differences
-        diff_samples = np.diff(chunk, n=2)
-        voice_energy = np.mean(diff_samples ** 2) if len(diff_samples) > 0 else 0.0
-        total_energy = np.mean(chunk ** 2) + 1e-8
-        spectral_ratio = voice_energy / total_energy
-
-        # Human vocal cord speech typical ZCR is between 0.04 and 0.30
-        if 0.03 < zcr < 0.32:
-            zcr_score = 1.0 - abs(zcr - 0.12) / 0.15
-            energy_score = min(1.0, float(rms * 18.0))
-            prob = max(0.0, min(1.0, zcr_score * 0.6 + energy_score * 0.4))
-        else:
-            prob = float(min(1.0, rms * 10.0))
-
-        return float(np.clip(prob, 0.01, 0.99))
+    def diagnostics(self):
+        return {"vad_backend": self.vad_backend, "vad_model_loaded": self.vad_model_loaded, "vad_error": self.vad_error}

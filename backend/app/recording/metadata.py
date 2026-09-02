@@ -23,6 +23,21 @@ class RecordingMetadata(BaseModel):
     frequency_hz: Optional[int] = None
     modulation: Optional[str] = None
     station_id: Optional[str] = None
+    profile: str = "radio_room"
+    noise_floor_dbfs: Optional[float] = None
+    dynamic_threshold_dbfs: Optional[float] = None
+    average_snr_db: Optional[float] = None
+    speech_band_snr_db: Optional[float] = None
+    vad_backend: str = "unknown"
+    vad_start_threshold: float = 0.65
+    vad_stop_threshold: float = 0.35
+    speech_duration_seconds: float = 0.0
+    raw_event_duration_seconds: float = 0.0
+    saved_duration_seconds: float = 0.0
+    trimmed_leading_seconds: float = 0.0
+    trimmed_trailing_seconds: float = 0.0
+    speech_segment_count: int = 0
+    ambient_profile_version: int = 1
 
 
 def save_metadata(meta: RecordingMetadata, output_dir: str = "recordings") -> str:
