@@ -19,6 +19,7 @@ import { useLanguage } from '../i18n/LanguageContext';
 import { exportRecordingsAsZip, triggerBlobDownload, ExportProgress } from '../services/zipExporter';
 import { downloadRecordingsCsv } from '../services/csvExporter';
 import { downloadRecordingWav, downloadRecordingsWavBatch } from '../services/wavDownloader';
+import { ReviewAnnotationModal } from './ReviewAnnotationModal';
 
 export type SortColumn = 'date' | 'duration' | 'size';
 export type SortDirection = 'asc' | 'desc';
@@ -85,6 +86,7 @@ export const RecordingsHistory: React.FC<Props> = ({
   const [downloadingRowId, setDownloadingRowId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [reviewRecording, setReviewRecording] = useState<RecordingMeta | null>(null);
 
   // Sorting state
   const [sortColumn, setSortColumn] = useState<SortColumn>('date');
@@ -602,6 +604,7 @@ export const RecordingsHistory: React.FC<Props> = ({
                   >
                     {t.play}
                   </button>
+                  <button type="button" onClick={() => setReviewRecording(rec)} className="text-emerald-400 hover:underline uppercase text-[10px]">Review</button>
                   <button
                     id={`download-wav-${rec.recording_id}`}
                     type="button"
@@ -639,6 +642,7 @@ export const RecordingsHistory: React.FC<Props> = ({
           })}
         </div>
       </div>
+      {reviewRecording && <ReviewAnnotationModal recording={reviewRecording} onClose={() => setReviewRecording(null)} />}
     </div>
   );
 };
