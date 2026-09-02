@@ -1,4 +1,4 @@
-import { AppSettings, AudioDevice, AudioDiagnostics, CalibrationState, RecordingMeta, UsbTroubleshootResult } from '../types';
+import { AppSettings, AudioDevice, AudioDiagnostics, CalibrationState, MonitorUpdate, RecordingMeta, UsbTroubleshootResult } from '../types';
 
 const backendOrigin = typeof window === 'undefined'
   ? 'http://127.0.0.1:8000'
@@ -159,6 +159,12 @@ export const api = {
 
   async getAudioDiagnostics(): Promise<AudioDiagnostics> {
     const res = await fetch(`${API_BASE}/audio/diagnostics`);
+    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async resetAmbientProfile(): Promise<MonitorUpdate> {
+    const res = await fetch(`${API_BASE}/audio/ambient-profile`, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
     return await res.json();
   },
