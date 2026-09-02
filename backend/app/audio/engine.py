@@ -51,6 +51,9 @@ class MainAudioEngine:
         self.current_voice_detected = False
         self.current_status = "idle"
         self.current_error: Optional[str] = None
+        self.effective_gain = 1.0
+        self.current_waveform: List[float] = [0.0] * 128
+        self.current_spectrum: List[float] = [0.0] * 64
 
         # Subscribers (e.g. WebSocket broadcast queues)
         self._listeners: List[Callable[[Dict[str, Any]], None]] = []
@@ -91,9 +94,11 @@ class MainAudioEngine:
 
     def _create_source(self) -> AudioSource:
         if self.config.source == "microphone":
-            return MicrophoneSource(device_id=self.config.device_id, sample_rate=self.config.sample_rate)
+            return MicrophoneSource(device_id=self.config.device_id, sample_rate=self.config.sample_rate,
+                                    input_channel=self.config.input_channel)
         elif self.config.source == "usb":
-            return SoundCardSource(device_id=self.config.device_id, sample_rate=self.config.sample_rate)
+            return SoundCardSource(device_id=self.config.device_id, sample_rate=self.config.sample_rate,
+                                   input_channel=self.config.input_channel)
         elif self.config.source == "gnuradio":
             return GNURadioSource(fifo_path=self.config.fifo_path, sample_rate=self.config.sample_rate)
         return MicrophoneSource(device_id=None, sample_rate=self.config.sample_rate)
@@ -170,6 +175,26 @@ class MainAudioEngine:
                         last_broadcast_time = now
                     time.sleep(0.01)
                     continue
+
+                # Gain is applied once, here, so meters, charts, VAD and saved WAV
+                # all describe exactly the same samples.
+                if self.config.auto_gain_control:
+                    raw_rms, raw_dbfs = self.rms_detector.process_chunk(chunk)
+                    target_gain = 10 ** ((-30.0 - raw_dbfs) / 20.0) if raw_rms > 0 else 1.0
+                    target_gain = float(np.clip(target_gain, 0.25, 8.0))
+                    self.effective_gain = 0.9 * self.effective_gain + 0.1 * target_gain
+                else:
+                    self.effective_gain = self.config.input_gain
+                chunk = np.clip(chunk * self.effective_gain, -1.0, 1.0).astype(np.float32)
+
+                # Preserve real processed samples for the realtime chart.
+                indices = np.linspace(0, len(chunk) - 1, 128).astype(int)
+                self.current_waveform = np.round(chunk[indices], 5).tolist()
+                windowed = chunk * np.hanning(len(chunk))
+                magnitudes = np.abs(np.fft.rfft(windowed)) / max(1, len(chunk) / 2)
+                spectrum_db = 20 * np.log10(np.maximum(magnitudes, 1e-5))
+                spectrum_indices = np.linspace(0, len(spectrum_db) - 1, 64).astype(int)
+                self.current_spectrum = np.clip((spectrum_db[spectrum_indices] + 100) / 100, 0, 1).round(5).tolist()
 
                 # 1. Compute RMS & dBFS
                 rms, dbfs = self.rms_detector.process_chunk(chunk)
@@ -253,6 +278,11 @@ class MainAudioEngine:
             "channels": 1,
             "capture_channels": getattr(source, "capture_channels", 1),
             "hostapi": getattr(source, "host_api", ""),
+            "input_channel": self.config.input_channel,
+            "effective_gain": round(self.effective_gain, 3),
+            "agc_active": self.config.auto_gain_control,
+            "waveform": self.current_waveform,
+            "spectrum": self.current_spectrum,
         }
 
     def restart(self) -> bool:

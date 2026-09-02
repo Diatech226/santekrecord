@@ -31,8 +31,8 @@ export const SourceSelector: React.FC<Props> = ({
   // Robust device filtering:
   // When 'usb' is selected, prioritize USB sound cards, Line-in, Hardware interfaces,
   // and devices containing USB / CODEC in their name.
-  // If no strict USB match is found, fallback to all available devices so the user
-  // is NEVER blocked from selecting their connected sound card.
+  // Keep source tabs honest: every option remains a PortAudio id usable by the
+  // backend, and the USB tab never relabels an internal microphone as USB.
   const filteredDevices = React.useMemo(() => {
     if (source === 'usb') {
       const usbCandidates = devices.filter((device) => {
@@ -40,7 +40,6 @@ export const SourceSelector: React.FC<Props> = ({
         return (
           device.type === 'usb' ||
           device.type === 'line' ||
-          device.device_kind === 'hardware' ||
           nameLower.includes('usb') ||
           nameLower.includes('codec') ||
           nameLower.includes('sound') ||
@@ -49,9 +48,9 @@ export const SourceSelector: React.FC<Props> = ({
           nameLower.includes('card')
         );
       });
-      return usbCandidates.length > 0 ? usbCandidates : devices;
+      return usbCandidates;
     }
-    return devices;
+    return devices.filter((device) => device.type !== 'usb' && device.type !== 'line');
   }, [devices, source]);
 
   const getDeviceLabel = (dev: AudioDevice) => {

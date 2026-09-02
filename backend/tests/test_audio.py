@@ -49,6 +49,26 @@ def test_stereo_to_mono():
     assert np.allclose(np.mean(stereo, axis=1), [0, .5])
 
 
+def test_auto_channel_avoids_stereo_phase_cancellation():
+    source = MicrophoneSource(input_channel="auto")
+    source._is_active = True
+    stereo = np.array([[1, -1], [.5, -.5]], dtype=np.float32)
+    source._audio_callback(stereo, 2, None, None)
+    assert np.allclose(source._queue.get_nowait(), [1, .5])
+
+    source = MicrophoneSource(input_channel="channel_2")
+    source._is_active = True
+    source._audio_callback(stereo, 2, None, None)
+    assert np.allclose(source._queue.get_nowait(), [-1, -.5])
+
+
+def test_audio_processing_settings_are_persisted():
+    config = AppConfig(input_gain=2.5, input_channel="channel_2", auto_gain_control=True)
+    assert config.input_gain == 2.5
+    assert config.input_channel == "channel_2"
+    assert config.auto_gain_control is True
+
+
 def test_resampling_48000_to_16000():
     assert len(resample_poly(np.ones(48000), 1, 3)) == 16000
 
