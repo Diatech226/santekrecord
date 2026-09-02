@@ -12,7 +12,7 @@ echo "=== Auto Voice Recorder (Kali Linux) ==="
 
 # 1. Install the complete runtime instead of assuming that the presence of
 # python3 means ALSA/PortAudio headers and venv support are also installed.
-SYSTEM_PACKAGES=(python3 python3-venv python3-pip portaudio19-dev libportaudio2 ffmpeg nodejs npm)
+SYSTEM_PACKAGES=(python3 python3-dev python3-venv python3-pip alsa-utils portaudio19-dev libportaudio2 ffmpeg nodejs npm)
 MISSING_PACKAGES=()
 for package in "${SYSTEM_PACKAGES[@]}"; do
     dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed" || MISSING_PACKAGES+=("$package")
@@ -51,6 +51,16 @@ if [ ! -p "/tmp/hackrf_audio.f32" ]; then
     echo "[*] Creating GNU Radio FIFO at /tmp/hackrf_audio.f32..."
     mkfifo /tmp/hackrf_audio.f32 || true
 fi
+
+echo "Checking audio..."
+echo "ALSA cards:"
+arecord -l 2>&1 || echo "No ALSA capture cards visible"
+echo "PortAudio:"
+python3 - <<'PYPORTAUDIO'
+import sounddevice as sd
+inputs = [(i, d['name']) for i, d in enumerate(sd.query_devices()) if d['max_input_channels'] > 0]
+print(inputs if inputs else 'No PortAudio inputs visible')
+PYPORTAUDIO
 
 # 6. Launch Backend & Frontend
 echo "[*] Starting FastAPI Backend on http://127.0.0.1:8000 ..."

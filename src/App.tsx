@@ -29,7 +29,8 @@ export default function App() {
   // Application State
   const [settings, setSettings] = useState<AppSettings>({
     source: 'microphone',
-    device_id: 'default-mic',
+    device_id: null,
+    audio_backend: 'auto',
     sample_rate: 16000,
     trigger_mode: 'db_vad',
     threshold_dbfs: -38,
@@ -162,6 +163,23 @@ export default function App() {
         api.getRecordings(),
       ]);
 
+      if (loadedSettings.source !== 'gnuradio') {
+        const valid = loadedDevices.find(d => String(d.id) === String(loadedSettings.device_id));
+        if (!valid) {
+          const previousByName = loadedDevices.find(d => d.name === loadedSettings.device_name);
+          const replacement = previousByName
+            ?? (loadedSettings.source === 'usb' ? loadedDevices.find(d => d.type === 'usb') : undefined)
+            ?? loadedDevices.find(d => d.is_default)
+            ?? loadedDevices[0];
+          if (replacement) {
+            loadedSettings.device_id = Number(replacement.id);
+            loadedSettings.device_name = replacement.name;
+            await api.saveSettings(loadedSettings);
+          } else {
+            loadedSettings.device_id = null;
+          }
+        }
+      }
       setSettings(loadedSettings);
       setDevices(loadedDevices);
       setRecordings(loadedRecordings);
@@ -205,6 +223,10 @@ export default function App() {
     } else {
       // Start
       try {
+        if (settings.source !== 'gnuradio' && settings.device_id === null) {
+          throw new Error('NO DEVICE: select an audio input before monitoring');
+        }
+        setStatus('opening');
         await api.startMonitoring(settings);
         monitoringRef.current = true;
         connectMonitorSocket();
@@ -538,7 +560,7 @@ export default function App() {
                 onSourceChange={handleSourceChange}
                 onDeviceChange={(devId: string | number) => {
                   const dev = devices.find((d) => String(d.id) === String(devId));
-                  handleUpdateSettings({ device_id: devId, device_name: dev?.name });
+                  handleUpdateSettings({ device_id: Number(devId), device_name: dev?.name });
                 }}
               />
               {settings.source !== 'gnuradio' && (
@@ -548,6 +570,26 @@ export default function App() {
                     {isTestingInput ? 'Testing input (3s)…' : 'Test Input'}
                   </button>
                   {testResult && <p className="text-[10px] text-[#A0A0A0]" role="status">{testResult}</p>}
+                  {telemetry && (
+                    <details className="text-[10px] border border-[#202226] rounded p-2 text-[#A0A0A0]">
+                      <summary className="cursor-pointer uppercase text-[#00F0FF]">Diagnostics / Advanced</summary>
+                      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2">
+                        <dt>Device</dt><dd>{telemetry.device_name ?? settings.device_name ?? '—'}</dd>
+                        <dt>Device ID</dt><dd>{settings.device_id ?? '—'}</dd>
+                        <dt>Capture Backend</dt><dd>{telemetry.capture_backend ?? telemetry.hostapi ?? '—'}</dd>
+                        <dt>ALSA Device</dt><dd>{telemetry.alsa_device ?? '—'}</dd>
+                        <dt>Native Rate</dt><dd>{telemetry.capture_sample_rate ?? '—'} Hz</dd>
+                        <dt>Processing Rate</dt><dd>{telemetry.processing_sample_rate ?? 16000} Hz</dd>
+                        <dt>Capture Channels</dt><dd>{telemetry.capture_channels ?? '—'}</dd>
+                        <dt>Input Channel</dt><dd>{telemetry.input_channel ?? settings.input_channel ?? 'auto'}</dd>
+                        <dt>Callbacks</dt><dd>{telemetry.callback_count ?? 0}</dd>
+                        <dt>Frames</dt><dd>{telemetry.frames_received ?? 0}</dd>
+                        <dt>Current RMS</dt><dd>{telemetry.level_dbfs?.toFixed(1)} dBFS</dd>
+                        <dt>Peak</dt><dd>{telemetry.peak_dbfs?.toFixed(1) ?? '—'} dBFS</dd>
+                        <dt>Last Frame</dt><dd>{telemetry.last_audio_frame_ms ?? '—'} ms</dd>
+                      </dl>
+                    </details>
+                  )}
                 </div>
               )}
             </div>
@@ -589,7 +631,8 @@ export default function App() {
                 }`}
               >
                 <Power className={`w-4 h-4 transition-transform duration-300 ${!isMonitoring ? 'group-hover:scale-110' : ''}`} />
-                {isMonitoring ? t.terminateSurveillance : t.startSurveillance}
+                {isMonitoring ? t.terminateSurveillance : status === 'opening'
+                  ? `Opening ${settings.device_name ?? 'audio device'}...` : t.startSurveillance}
               </button>
 
               <button

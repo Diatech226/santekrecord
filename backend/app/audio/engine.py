@@ -9,6 +9,7 @@ from .base import AudioSource
 from .microphone import MicrophoneSource
 from .soundcard import SoundCardSource
 from .gnuradio import GNURadioSource
+from .alsa import ALSAArecordSource, match_alsa_device
 from ..detection.rms import RMSDetector
 from ..detection.vad import SileroVADDetector
 from ..recording.recorder import AudioRecorderEngine
@@ -103,6 +104,24 @@ class MainAudioEngine:
             return GNURadioSource(fifo_path=self.config.fifo_path, sample_rate=self.config.sample_rate)
         return MicrophoneSource(device_id=None, sample_rate=self.config.sample_rate)
 
+    def _try_alsa_fallback(self, failed_source: AudioSource) -> Optional[AudioSource]:
+        if self.config.audio_backend not in ("auto", "alsa") or self.config.source == "gnuradio":
+            return None
+        device_name = getattr(failed_source, "device_name", "") or self.config.device_name or ""
+        mapping = match_alsa_device(device_name)
+        if mapping is None:
+            self.current_error = f"No certain PortAudio to ALSA mapping for {device_name!r}"
+            return None
+        fallback = ALSAArecordSource(
+            mapping, sample_rate=self.config.sample_rate,
+            capture_sample_rate=getattr(failed_source, "capture_sample_rate", 48000),
+            channels=getattr(failed_source, "capture_channels", 2),
+            input_channel=self.config.input_channel,
+        )
+        print(f"[AUDIO START] Trying ALSA fallback: {mapping.identifier}")
+        fallback.start()
+        return fallback if fallback.verify_audio_stream() else (fallback.stop() or None)
+
     def start(self) -> bool:
         if self._is_running:
             return True
@@ -110,7 +129,32 @@ class MainAudioEngine:
         self.current_error = None
         try:
             self.source = self._create_source()
-            self.source.start()
+            print(f"[AUDIO START] Requested source: {self.config.source}")
+            if self.config.audio_backend == "alsa":
+                original = self.source
+                self.source = self._try_alsa_fallback(original)
+                if self.source is None:
+                    raise RuntimeError(self.current_error or "ALSA fallback unavailable")
+            else:
+                try:
+                    self.source.start()
+                except Exception:
+                    failed = self.source
+                    fallback = self._try_alsa_fallback(failed)
+                    if fallback is None:
+                        raise
+                    self.source = fallback
+                verifier = getattr(self.source, "verify_audio_stream", None)
+                if verifier and not verifier():
+                    failed = self.source
+                    failed.stop()
+                    fallback = None if isinstance(failed, ALSAArecordSource) else self._try_alsa_fallback(failed)
+                    if fallback is None:
+                        raise RuntimeError(
+                            f"PortAudio opened {getattr(failed, 'device_name', self.config.device_name)} "
+                            "but no audio frames were received"
+                        )
+                    self.source = fallback
         except Exception as e:
             self.current_error = f"Audio source error: {e}"
             self.current_status = "error"
@@ -203,6 +247,8 @@ class MainAudioEngine:
                 self.current_peak_dbfs = round(self.rms_detector.rms_to_dbfs(peak), 1)
                 self.frames_received += len(chunk)
                 self.last_audio_frame_at = time.time()
+                if self.frames_received <= len(chunk) or self.frames_received % self.config.sample_rate < len(chunk):
+                    print(f"[AUDIO ENGINE] frames_received={self.frames_received} processing_rate={self.config.sample_rate} level={self.current_level_dbfs:.1f}")
                 if self.current_error == "No audio callback received for 2 seconds":
                     self.current_error = None
                 self._noise_levels.append(dbfs)
@@ -240,7 +286,9 @@ class MainAudioEngine:
         source = self.source
         last_frame_ms = None if self.last_audio_frame_at is None else round((now - self.last_audio_frame_at) * 1000)
         receiving = last_frame_ms is not None and last_frame_ms < 1000
-        if self._is_running and not receiving and self.started_at and now - self.started_at > 1.0:
+        if self.config.source != "gnuradio" and self.config.device_id is None:
+            signal_state = "no_device"
+        elif self._is_running and not receiving and self.started_at and now - self.started_at > 1.0:
             signal_state = "no_audio_data"
         elif self.current_level_dbfs <= -85:
             signal_state = "silence"
@@ -270,6 +318,7 @@ class MainAudioEngine:
             ),
             "audio_frames_received": receiving,
             "frames_received": self.frames_received,
+            "callback_count": getattr(source, "callback_count", 0),
             "last_audio_frame_ms": last_frame_ms,
             "signal_state": signal_state,
             "device_name": getattr(source, "device_name", self.config.device_name),
@@ -278,6 +327,8 @@ class MainAudioEngine:
             "channels": 1,
             "capture_channels": getattr(source, "capture_channels", 1),
             "hostapi": getattr(source, "host_api", ""),
+            "capture_backend": "alsa" if isinstance(source, ALSAArecordSource) else "portaudio",
+            "alsa_device": getattr(getattr(source, "alsa_device", None), "identifier", None),
             "input_channel": self.config.input_channel,
             "effective_gain": round(self.effective_gain, 3),
             "agc_active": self.config.auto_gain_control,

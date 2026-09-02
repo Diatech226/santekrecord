@@ -1,19 +1,21 @@
 {
   "source": "microphone",
-  "device_id": "default-mic",
+  "device_id": null,
+  "device_name": null,
+  "audio_backend": "auto",
   "sample_rate": 16000,
   "trigger_mode": "db_vad",
-  "threshold_dbfs": -38,
+  "threshold_dbfs": -38.0,
   "vad_threshold": 0.6,
-  "preroll_seconds": 1,
-  "silence_seconds": 2,
+  "preroll_seconds": 1.0,
+  "silence_seconds": 2.0,
   "auto_trim_silence": true,
   "trim_margin_seconds": 0.2,
   "input_gain": 1.0,
   "input_channel": "auto",
   "auto_gain_control": false,
+  "fifo_path": "/tmp/hackrf_audio.f32",
   "frequency_hz": 145000000,
   "modulation": "NFM",
-  "station_id": "ST001",
-  "fifo_path": "/tmp/hackrf_audio.f32"
+  "station_id": "ST001"
 }
