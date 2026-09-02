@@ -35,6 +35,10 @@ class AppConfig(BaseModel):
     silence_seconds: float = Field(
         default=2.0, description="Silence hang time in seconds before stopping recording"
     )
+    intra_phrase_pause_seconds: float = Field(default=1.2, ge=0.0, le=10.0)
+    transmission_end_timeout_seconds: float = Field(default=3.0, ge=0.1, le=30.0)
+    communication_end_timeout_seconds: float = Field(default=10.0, ge=0.5, le=120.0)
+    max_communication_seconds: float = Field(default=300.0, ge=1.0, le=3600.0)
     auto_trim_silence: bool = Field(default=True, description="Trim dead air after recording")
     trim_margin_seconds: float = Field(default=0.2, ge=0.0, le=2.0)
     input_gain: float = Field(default=1.0, ge=0.1, le=8.0)
