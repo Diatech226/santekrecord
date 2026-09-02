@@ -107,11 +107,16 @@ class OfflineAudioReplayer:
                     vad_backend=vad.vad_backend, metrics={"noise_floor_dbfs": metrics.noise_floor_dbfs,
                     "dynamic_threshold_dbfs": metrics.dynamic_threshold_dbfs,
                     "snr_db": metrics.broadband_snr_db, "speech_band_snr_db": metrics.speech_band_snr_db,
-                    "spectral_change": metrics.spectral_difference})
+                    "spectral_change": metrics.spectral_difference,
+                    "speech_probability": probability,
+                    "speech_confirmed": decision.speech_confirmed,
+                    "radio_activity": decision.radio_activity,
+                    "radio_activity_score": decision.radio_activity_score})
                 if position < len(audio):
                     decisions.append({"start_sample": position, "end_sample": min(position + len(raw), len(audio)),
                                       "speech": bool(decision.speech_confirmed and not learning),
-                                      "radio_activity": bool(decision.radio_activity)})
+                                      "radio_activity": bool(decision.radio_activity),
+                                      "radio_activity_score": decision.radio_activity_score})
                 position += self.frame_samples
             recorder.stop_and_flush()
         communications = []

@@ -9,7 +9,17 @@ class SpeechDecision:
     speech_confirmed: bool
     confidence: float
     radio_activity: bool
+    radio_activity_score: float
     reject_reason: str
+
+    def ambient_update_allowed(self, speech_probability, recording_active,
+                               low_probability_threshold=.15):
+        """Whether this frame is safe evidence of the room without communication."""
+        return (speech_probability < low_probability_threshold
+                and not self.is_candidate
+                and not self.speech_confirmed
+                and not self.radio_activity
+                and not recording_active)
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,20 @@ class DetectionProfile:
         if self.use_radio_features and speech_band_snr_db < minimum_snr and spectral_change < .18:
             return False, "radio_features_too_low"
         return True, "candidate_waiting_confirmation"
+
+    def radio_score(self, snr_db, speech_band_snr_db, spectral_change, minimum_snr):
+        """Score radio-event evidence independently from speech evidence.
+
+        A room voice may have excellent VAD/SNR, so energy alone is deliberately
+        insufficient.  The spectral departure from the learned room is the main
+        radio-signature evidence; band and broadband energy only support it.
+        """
+        if not self.use_radio_features:
+            return 0.0
+        signature = max(0.0, min(1.0, (spectral_change - .12) / .38))
+        band = max(0.0, min(1.0, speech_band_snr_db / max(1.0, minimum_snr * 2)))
+        snr = max(0.0, min(1.0, snr_db / max(1.0, minimum_snr * 2)))
+        return max(0.0, min(1.0, .65 * signature + .20 * band + .15 * snr))
 
 
 RADIO_ROOM = DetectionProfile("radio_room", .85, True)
@@ -76,5 +100,10 @@ class SpeechDetector:
             reason = "speech_confirmed"
         elif candidate:
             reason = "minimum_duration_not_reached"
-        radio = self.profile.use_radio_features and (snr_db >= self.minimum_snr or spectral_change >= .18) and not confirmed
-        return SpeechDecision(candidate, confirmed, round(confidence, 4), radio, reason)
+        radio_score = self.profile.radio_score(
+            snr_db, speech_band_snr_db, spectral_change, self.minimum_snr)
+        # Speech and radio activity describe superposable physical layers.  Do
+        # not suppress a radio signature merely because VAD confirmed speech.
+        radio = radio_score >= .50
+        return SpeechDecision(candidate, confirmed, round(confidence, 4), radio,
+                              round(radio_score, 4), reason)
