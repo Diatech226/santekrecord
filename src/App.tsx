@@ -750,7 +750,15 @@ export default function App() {
                     ['SNR', `${(telemetry?.snr_db ?? 0).toFixed(1)} dB`],
                     ['Speech band', `${(telemetry?.speech_band_snr_db ?? 0).toFixed(1)} dB`],
                     ['Speech', speechProb.toFixed(2)],
-                    ['Event', telemetry?.ambient_learning ? 'LEARNING AMBIENT' : telemetry?.radio_activity ? 'RADIO ACTIVITY' : voiceDetected ? 'VOICE DETECTED' : status.replaceAll('_', ' ').toUpperCase()],
+                    ['Event', telemetry?.ambient_learning ? 'LEARNING AMBIENT' : ({
+                      speech: 'VOICE',
+                      intra_phrase_pause: 'PAUSE',
+                      transmission_hangover: 'WAITING END OF TRANSMISSION',
+                    }[telemetry?.transmission_state ?? ''] ?? (
+                      telemetry?.session_state === 'waiting_reply' ? 'WAITING FOR REPLY' :
+                      telemetry?.session_state === 'saving_communication' ? 'SAVING COMMUNICATION' :
+                      telemetry?.radio_activity ? 'RADIO ACTIVITY' : voiceDetected ? 'VOICE' : status.replaceAll('_', ' ').toUpperCase()
+                    ))],
                   ].map(([label, value]) => (
                     <div key={label} className="p-2 bg-[#0A0B0D] border border-[#1A1B1F] rounded">
                       <div className="text-[#606060] uppercase">{label}</div><div className="text-[#E0E0E0] mt-1">{value}</div>

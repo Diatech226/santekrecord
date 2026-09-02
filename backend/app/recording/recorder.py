@@ -34,6 +34,7 @@ class AudioRecorderEngine:
         self.metrics = []
         self.segmenter = SpeechSegmenter()  # compatibility for legacy integrations
         self.radio_activity_samples = 0
+        self.meaningful_radio_samples = 0
         self._sequence_stamp = ""
         self._sequence = 0
         self._configure_managers()
@@ -41,10 +42,10 @@ class AudioRecorderEngine:
     def _configure_managers(self):
         self.transmission_manager = TransmissionManager(
             self.sample_rate, self.config.intra_phrase_pause_seconds,
-            self.config.transmission_end_timeout_seconds)
+            self.config.transmission_end_timeout_seconds, self.config.ambient_confirm_ms)
         self.session_manager = CommunicationSessionManager(
             self.sample_rate, self.config.communication_end_timeout_seconds,
-            self.config.max_communication_seconds)
+            self.config.max_communication_seconds, self.config.ambient_confirm_ms)
 
     def update_config(self, config):
         self.config, self.sample_rate = config, config.sample_rate
@@ -99,6 +100,14 @@ class AudioRecorderEngine:
             self.metrics.append(metrics)
         if radio_activity:
             self.radio_activity_samples += len(chunk)
+        spectral_change = float((metrics or {}).get("spectral_change", 0.0))
+        snr_db = float((metrics or {}).get("snr_db", 0.0))
+        radio_evidence = radio_activity and (not metrics or (
+            spectral_change >= self.config.ambient_return_spectral_threshold and
+            snr_db >= self.config.minimum_snr_db))
+        self.meaningful_radio_samples = self.meaningful_radio_samples + len(chunk) if radio_evidence else 0
+        meaningful_radio_activity = bool(speech_confirmed) or (
+            self.meaningful_radio_samples >= int(self.config.ambient_confirm_ms * self.sample_rate / 1000))
         transmission_id = len(self.session_manager.session.transmissions) + 1
         closed = self.transmission_manager.process(
             start, end, bool(speech_confirmed), radio_activity, return_to_ambient, transmission_id)
@@ -108,7 +117,9 @@ class AudioRecorderEngine:
             self.session_manager.state = SessionState.TRANSMISSION_ACTIVE
 
         reason = self.session_manager.observe(
-            end, bool(speech_confirmed), radio_activity, return_to_ambient, self.session_start_sample)
+            end, bool(speech_confirmed), radio_activity, return_to_ambient, self.session_start_sample,
+            meaningful_radio_activity=meaningful_radio_activity,
+            transmission_active=self.transmission_manager.current is not None)
         if reason:
             pending = self.transmission_manager.flush()
             if pending:
@@ -116,7 +127,11 @@ class AudioRecorderEngine:
             self._save_active_session(reason)
             self.current_status = "listening"
         elif self.transmission_manager.current:
-            self.current_status = "communication_active" if speech_confirmed else "transmission_hangover"
+            self.current_status = {
+                "speech": "voice",
+                "intra_phrase_pause": "pause",
+                "transmission_hangover": "transmission_hangover",
+            }.get(self.transmission_manager.state.value, "communication_active")
         else:
             self.current_status = "waiting_reply"
         return self.current_status, bool(speech_confirmed), self.is_recording
@@ -184,7 +199,8 @@ class AudioRecorderEngine:
 
     def _clear(self):
         self.recorded_chunks = []; self.total_samples = 0; self.metrics = []
-        self.transmission_manager.reset(); self.segmenter.reset(); self.radio_activity_samples = 0; self.is_recording = False
+        self.transmission_manager.reset(); self.segmenter.reset(); self.radio_activity_samples = 0
+        self.meaningful_radio_samples = 0; self.is_recording = False
 
     def session_telemetry(self):
         session = self.session_manager.session
@@ -198,6 +214,10 @@ class AudioRecorderEngine:
             "communication_duration_seconds": round(self.total_samples / self.sample_rate, 2) if session else 0,
             "time_since_last_speech": round((self.total_samples - last) / self.sample_rate, 2) if session and last is not None else None,
             "session_state": self.session_manager.state.value if session else "ambient",
+            "transmission_state": self.transmission_manager.state.value,
+            "return_to_ambient": bool(self.transmission_manager.ambient_samples),
+            "ambient_confirm_ms": round(self.transmission_manager.ambient_samples * 1000 / self.sample_rate),
+            "quiet_seconds": round(self.transmission_manager.quiet_samples / self.sample_rate, 3),
         }
 
     def stop_and_flush(self):

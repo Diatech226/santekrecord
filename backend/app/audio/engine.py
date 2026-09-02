@@ -322,11 +322,13 @@ class MainAudioEngine:
                     metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
                              "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
                              "snr_db": noise_metrics.broadband_snr_db,
-                             "speech_band_snr_db": noise_metrics.speech_band_snr_db},
+                             "speech_band_snr_db": noise_metrics.speech_band_snr_db,
+                             "spectral_change": noise_metrics.spectral_difference},
                     vad_backend=self.vad_detector.vad_backend,
-                    return_to_ambient=(noise_metrics.spectral_difference < .12 and
+                    return_to_ambient=(noise_metrics.spectral_difference < self.config.ambient_return_spectral_threshold and
                                        noise_metrics.broadband_snr_db < self.config.minimum_snr_db and
-                                       speech_prob < self.config.vad_stop_threshold),
+                                       speech_prob < self.config.vad_stop_threshold and
+                                       not decision.radio_activity),
                 )
                 self.current_status = "learning_ambient" if self.ambient_learning else status
                 self.current_voice_detected = voice_detected
