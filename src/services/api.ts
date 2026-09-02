@@ -57,7 +57,9 @@ export const api = {
 
     return {
       source: 'microphone',
-      device_id: 'default-mic',
+      device_id: null,
+      device_name: undefined,
+      audio_backend: 'auto',
       sample_rate: 16000,
       trigger_mode: 'db_vad',
       threshold_dbfs: -38,
@@ -100,7 +102,10 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: settings ? JSON.stringify(settings) : undefined,
       });
-      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error ?? body.detail ?? `HTTP ${res.status}`);
+      }
       return await res.json();
     } catch (error) {
       throw error instanceof Error ? error : new Error('Unable to start audio backend');
@@ -213,86 +218,7 @@ export const api = {
       // fallback
     }
 
-    // 3. Fallback mock diagnostic result for client-only / offline testing
-    return {
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      platform: typeof navigator !== 'undefined' ? navigator.userAgent : 'Linux / Kali',
-      user: 'kali',
-      groups: ['kali', 'audio', 'plugdev', 'sudo', 'dialout', 'netdev'],
-      in_audio_group: true,
-      in_plugdev_group: true,
-      dev_snd_exists: true,
-      dev_snd_readable: true,
-      dev_snd_nodes_count: 6,
-      dev_bus_usb_exists: true,
-      dev_bus_usb_readable: true,
-      usb_devices: [
-        { id: 'Bus 001 Device 002', name: 'ID 08bb:2902 Texas Instruments PCM2902 Audio Codec' },
-        { id: 'Bus 001 Device 003', name: 'ID 1d50:6089 Great Scott Gadgets HackRF One' }
-      ],
-      sound_cards: [
-        { id: 0, name: '[ALSA] Default Audio Device (hw:0,0)' },
-        { id: 1, name: '[USB-Audio] USB Audio CODEC Line-In (hw:1,0)' }
-      ],
-      audio_server: 'PipeWire / PulseAudio',
-      checks: [
-        {
-          id: 'group_audio',
-          name: "Groupe système 'audio'",
-          category: 'groups',
-          status: 'pass',
-          message: "L'utilisateur 'kali' est membre du groupe 'audio' (accès ALSA autorisé)",
-          details: 'Groupes: kali, audio, plugdev, sudo, dialout, netdev',
-          fix_command: 'sudo usermod -aG audio $USER && newgrp audio',
-        },
-        {
-          id: 'group_plugdev',
-          name: "Groupe système 'plugdev'",
-          category: 'groups',
-          status: 'pass',
-          message: "L'utilisateur 'kali' appartient au groupe 'plugdev' (USB / SDR / libusb)",
-          details: 'Autorise la communication avec les périphériques USB à chaud sans privilèges root.',
-          fix_command: 'sudo usermod -aG plugdev $USER',
-        },
-        {
-          id: 'dev_snd',
-          name: 'Permissions /dev/snd',
-          category: 'permissions',
-          status: 'pass',
-          message: '/dev/snd accessible en lecture (6 nœuds audio détectés)',
-          details: 'Nœuds ALSA: pcmC0D0c, controlC0, pcmC1D0c, controlC1, timer, seq',
-          fix_command: 'sudo chmod -R a+rw /dev/snd/',
-        },
-        {
-          id: 'dev_bus_usb',
-          name: 'Permissions /dev/bus/usb',
-          category: 'permissions',
-          status: 'pass',
-          message: '/dev/bus/usb accessible pour l\'énumération USB',
-          details: '2 périphérique(s) USB physique(s) identifié(s)',
-          fix_command: 'sudo udevadm control --reload-rules && sudo udevadm trigger',
-        },
-        {
-          id: 'sound_cards',
-          name: 'Cartes son ALSA reconnues',
-          category: 'devices',
-          status: 'pass',
-          message: '2 carte(s) son reconnue(s) par le noyau ALSA',
-          details: '[ALSA] Default Audio Device (hw:0,0), [USB-Audio] USB Audio CODEC Line-In (hw:1,0)',
-          fix_command: 'dmesg | tail -n 20',
-        },
-        {
-          id: 'audio_daemon',
-          name: 'Serveur Audio Linux (PipeWire / PulseAudio)',
-          category: 'services',
-          status: 'pass',
-          message: 'Serveur audio actif : PipeWire / PulseAudio',
-          details: 'Routage audio et capture PCM en temps réel fonctionnels.',
-          fix_command: 'systemctl --user restart pipewire pipewire-pulse',
-        },
-      ],
-      overall_status: 'ok',
-    };
+    throw new Error('FastAPI hardware diagnostics are unavailable');
   },
 
   async calibrateNoise(): Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number }> {
@@ -312,7 +238,7 @@ export const api = {
     } catch {
       // client-side audio engine handling
     }
-    return { success: true, message: 'Monitoring stopped' };
+    throw new Error('FastAPI audio backend is unavailable');
   },
 
   async getRecordings(): Promise<RecordingMeta[]> {

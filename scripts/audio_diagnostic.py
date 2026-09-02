@@ -1,60 +1,51 @@
 #!/usr/bin/env python3
-"""Interactive PortAudio input diagnostic; run from the repository root."""
+"""Interactive real-frame PortAudio/ALSA diagnostic (never emits simulated values)."""
 from __future__ import annotations
-
-import argparse
-import platform
-import sys
+import platform, sys, time
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from backend.app.audio.microphone import MicrophoneSource  # noqa: E402
-from backend.app.detection.rms import RMSDetector  # noqa: E402
-import numpy as np  # noqa: E402
+import numpy as np
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.app.audio.microphone import MicrophoneSource, sd
+from backend.app.audio.alsa import ALSAArecordSource, list_alsa_devices, match_alsa_device
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", type=int, help="real PortAudio device ID")
-    parser.add_argument("--seconds", type=float, default=3.0)
-    args = parser.parse_args()
-    print("Auto Voice Recorder - Linux Audio Diagnostic\n")
-    print(f"Platform:\n{platform.system()}\n")
-    devices = MicrophoneSource.list_devices()
-    print(f"PortAudio:\n{'OK' if devices else 'UNAVAILABLE OR NO INPUT'}\n\nInput devices:\n")
-    for dev in devices:
-        print(f"[{dev['id']}]\n{dev['name']}\nInputs: {dev['max_input_channels']}")
-        print(f"Rate: {dev['default_samplerate']}\nHost API: {dev['hostapi']}\nType: {dev['device_kind']}\n")
-    if not devices:
-        return 1
-    device_id = args.device if args.device is not None else next(
-        (d["id"] for d in devices if "usb" in d["name"].lower()), devices[0]["id"]
-    )
-    source = MicrophoneSource(device_id=device_id, sample_rate=16000)
-    chunks = []
+def measure(source, seconds=1.0):
+    frames, squares, peak = 0, 0.0, 0.0
+    source.start()
     try:
-        print(f"Testing {next(d['name'] for d in devices if d['id'] == device_id)}...\n")
-        source.start()
-        import time
-        deadline = time.monotonic() + args.seconds
+        verifier = getattr(source, "verify_audio_stream", lambda: True)
+        if not verifier(): return None
+        deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             chunk = source.read_chunk()
             if chunk is not None and len(chunk):
-                chunks.append(chunk)
-    except Exception as exc:
-        print(f"RESULT:\nINPUT FAILED\n\nExact error: {exc}")
-        return 2
-    finally:
-        source.stop()
-    samples = np.concatenate(chunks) if chunks else np.empty(0, dtype=np.float32)
-    rms, level = RMSDetector.process_chunk(samples)
-    peak = RMSDetector.rms_to_dbfs(float(np.max(np.abs(samples))) if len(samples) else 0.0)
-    print(f"Frames received: {len(samples)}\nCurrent RMS: {rms:.4f}\nLevel: {level:.1f} dBFS\nPeak: {peak:.1f} dBFS")
-    print(f"\nRESULT:\n{'INPUT WORKING' if len(samples) else 'NO AUDIO DATA'}")
-    return 0 if len(samples) else 3
+                frames += len(chunk); squares += float(np.sum(chunk.astype(np.float64) ** 2)); peak = max(peak, float(np.max(np.abs(chunk))))
+    finally: source.stop()
+    if not frames: return None
+    rms = (squares / frames) ** .5
+    db = lambda value: max(-100.0, 20 * np.log10(max(value, 1e-5)))
+    return frames, db(rms), db(peak)
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+print("SANTEK RECORD AUDIO DIAGNOSTIC\n\nOS:\n" + platform.platform())
+print("\nPortAudio:\n" + ("OK" if sd is not None else "UNAVAILABLE"))
+if sd is not None: print(sd.query_devices())
+alsa = list_alsa_devices()
+print("\nALSA:\n" + ("OK" if alsa else "UNAVAILABLE"))
+for d in alsa: print(f"  card {d.card}, device {d.device}: {d.name} ({d.identifier})")
+inputs = MicrophoneSource.list_devices()
+print("\nInputs:")
+for d in inputs: print(f"[{d['id']}] {d['name']}\nPortAudio ID: {d['id']}\nALSA: {d.get('alsa_identifier') or 'unmatched'}")
+for d in inputs:
+    print(f"\nTesting {d['name']}...\nOpening PortAudio...")
+    try: result = measure(MicrophoneSource(d['id']))
+    except Exception as exc: print(f"FAILED: {exc}"); result = None
+    backend = "PortAudio"
+    if result is None:
+        print("NO FRAMES\nTrying ALSA...")
+        mapping = match_alsa_device(d['name'])
+        try: result = measure(ALSAArecordSource(mapping)) if mapping else None
+        except Exception as exc: print(f"FAILED: {exc}"); result = None
+        backend = "ALSA fallback"
+    if result:
+        print(f"Frames: {result[0]}\nRMS: {result[1]:.1f} dBFS\nPeak: {result[2]:.1f} dBFS\nRESULT: AUDIO INPUT WORKING ({backend})")
+    else: print("RESULT: NO AUDIO DATA")

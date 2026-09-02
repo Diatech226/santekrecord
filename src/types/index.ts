@@ -4,6 +4,7 @@ export type DetectionMode = 'db_vad' | 'db_only' | 'vad_only';
 
 export type EngineStatus =
   | 'idle'
+  | 'opening'
   | 'listening'
   | 'voice_detected'
   | 'recording'
@@ -71,6 +72,7 @@ export interface AppSettings {
   source: AudioSourceType;
   device_id: number | string | null;
   device_name?: string;
+  audio_backend?: 'auto' | 'portaudio' | 'alsa';
   sample_rate: number;
   trigger_mode: DetectionMode;
   threshold_dbfs: number;
@@ -109,7 +111,7 @@ export interface MonitorUpdate {
   audio_frames_received?: boolean;
   frames_received?: number;
   last_audio_frame_ms?: number | null;
-  signal_state?: 'no_audio_data' | 'silence' | 'low_signal' | 'signal' | 'voice';
+  signal_state?: 'no_device' | 'no_audio_data' | 'silence' | 'low_signal' | 'signal' | 'voice';
   device_name?: string;
   capture_sample_rate?: number;
   processing_sample_rate?: number;
@@ -121,6 +123,12 @@ export interface MonitorUpdate {
   spectrum?: number[];
   active_source?: string;
   error_message?: string | null;
+  callback_count?: number;
+  capture_channels?: number;
+  capture_backend?: string;
+  alsa_device?: string | null;
+  hostapi?: string;
+  input_channel?: string;
 }
 
 export interface TrimInfo {

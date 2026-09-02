@@ -8,7 +8,7 @@ import platform
 import numpy as np
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from ..config.settings import AppConfig, load_config, save_config
@@ -64,12 +64,22 @@ def audio_diagnostics(engine=Depends(get_engine)):
         "default_input_device": default_input,
         "devices": devices,
         "selected_device": selected,
+        "selected_device_id": selected_id,
+        "selected_device_name": selected["name"] if selected else engine.config.device_name,
+        "capture_backend": telemetry.get("capture_backend"),
         "stream_active": engine._is_running,
         "frames_received": telemetry["frames_received"],
         "last_frame_ms": telemetry["last_audio_frame_ms"],
         "native_samplerate": telemetry["capture_sample_rate"],
+        "capture_samplerate": telemetry["capture_sample_rate"],
         "processing_samplerate": telemetry["processing_sample_rate"],
         "hostapi": telemetry.get("hostapi"),
+        "capture_channels": telemetry.get("capture_channels"),
+        "selected_channel": telemetry.get("input_channel"),
+        "callback_count": telemetry.get("callback_count", 0),
+        "level_dbfs": telemetry.get("level_dbfs"),
+        "peak_dbfs": telemetry.get("peak_dbfs"),
+        "alsa_device": telemetry.get("alsa_device"),
         "error": engine.current_error,
     }
 
@@ -175,7 +185,8 @@ def get_usb_diagnostic():
     # 7. Build granular diagnostic checks
     checks = []
 
-    # Check: Audio Group
+    # Group membership is informational: PipeWire logind/ACL installations do
+    # not require the legacy audio group. Actual stream tests are authoritative.
     if in_audio_group:
         checks.append({
             "id": "group_audio",
@@ -190,10 +201,9 @@ def get_usb_diagnostic():
             "id": "group_audio",
             "name": "Groupe système 'audio'",
             "category": "groups",
-            "status": "fail",
-            "message": f"L'utilisateur '{current_user}' n'appartient PAS au groupe 'audio'. L'accès direct au matériel audio sera bloqué par ALSA.",
-            "details": "Sur Kali Linux, les droits audio exigent l'appartenance au groupe 'audio'.",
-            "fix_command": f"sudo usermod -aG audio {current_user} && newgrp audio",
+            "status": "warn",
+            "message": f"L'utilisateur '{current_user}' n'est pas membre du groupe audio (cela peut être normal avec PipeWire/logind).",
+            "details": "Utilisez Test Input pour vérifier l'accès réel au lieu de déduire les permissions depuis les groupes.",
         })
 
     # Check: Plugdev Group
@@ -236,7 +246,7 @@ def get_usb_diagnostic():
             "status": "fail",
             "message": "/dev/snd existe mais est inaccessible en lecture pour l'utilisateur actuel.",
             "details": "Droits insuffisants sur les fichiers de périphériques ALSA.",
-            "fix_command": "sudo chmod -R a+rw /dev/snd/",
+            "fix_command": "getfacl /dev/snd/*",
         })
     else:
         checks.append({
@@ -380,8 +390,14 @@ def start_monitoring(settings_override: Optional[AppConfig] = None, engine=Depen
         engine.update_config(settings_override)
     ok = engine.start()
     if not ok:
-        raise HTTPException(status_code=500, detail=engine.current_error or "Failed to start audio engine")
-    return {"success": True, "message": "Monitoring active"}
+        telemetry = engine.get_telemetry()
+        return JSONResponse(status_code=503, content={
+            "success": False, "error": engine.current_error or "Failed to start audio engine",
+            "device_id": engine.config.device_id, "device_name": engine.config.device_name,
+            "hostapi": telemetry.get("hostapi"),
+            "native_samplerate": telemetry.get("capture_sample_rate"),
+        })
+    return {"success": True, "message": "Monitoring active", **engine.get_telemetry()}
 
 
 @router.post("/monitor/stop")
@@ -433,12 +449,19 @@ def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
     """Capture a selected real PortAudio input and return measurable signal data."""
     if engine._is_running:
         raise HTTPException(status_code=409, detail="Stop monitoring before testing an input")
-    source = MicrophoneSource(device_id=request.device_id, sample_rate=engine.config.sample_rate)
+    source = MicrophoneSource(device_id=request.device_id, sample_rate=engine.config.sample_rate,
+                              input_channel=engine.config.input_channel)
     frames = 0
     sum_squares = 0.0
     peak = 0.0
     try:
         source.start()
+        if not source.verify_audio_stream():
+            failed = source
+            failed.stop()
+            source = engine._try_alsa_fallback(failed)
+            if source is None:
+                raise RuntimeError(f"PortAudio opened {failed.device_name} but no audio frames were received")
         deadline = time.monotonic() + min(5.0, max(0.5, request.duration_seconds))
         while time.monotonic() < deadline:
             chunk = source.read_chunk()
@@ -462,6 +485,10 @@ def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
         "device_name": source.device_name,
         "native_samplerate": source.capture_sample_rate,
         "channels": source.capture_channels,
+        "capture_channels": source.capture_channels,
+        "callback_count": getattr(source, "callback_count", 0),
+        "hostapi": source.host_api,
+        "capture_backend": "alsa" if source.__class__.__name__ == "ALSAArecordSource" else "portaudio",
         "frames_received": frames,
         "rms": rms,
         "level_dbfs": round(RMSDetector.rms_to_dbfs(rms), 1),

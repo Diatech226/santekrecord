@@ -10,12 +10,13 @@ class AppConfig(BaseModel):
     source: Literal["microphone", "usb", "gnuradio"] = Field(
         default="microphone", description="Active audio input source"
     )
-    device_id: Optional[int | str] = Field(
-        default=None, description="Index or identifier of sounddevice hardware device"
+    device_id: Optional[int] = Field(
+        default=None, description="Exact PortAudio device index; null until selected"
     )
     device_name: Optional[str] = Field(
-        default="Default System Microphone", description="Friendly device label"
+        default=None, description="Friendly device label used to recover a stale index"
     )
+    audio_backend: Literal["auto", "portaudio", "alsa"] = Field(default="auto")
     sample_rate: int = Field(
         default=16000, description="Sampling rate in Hz (standard 16000 for VAD and Whisper)"
     )
