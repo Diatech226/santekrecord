@@ -6,3 +6,13 @@ coverage/
 *.log
 .env*
 !.env.example
+evaluation_data/audio/*
+evaluation_data/annotations/*
+evaluation_results/*
+!evaluation_data/audio/.gitkeep
+!evaluation_data/annotations/.gitkeep
+!evaluation_data/README.md
+!evaluation_results/.gitkeep
+
+__pycache__/
+*.py[cod]

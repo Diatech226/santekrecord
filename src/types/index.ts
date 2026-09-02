@@ -215,6 +215,13 @@ export interface RecordingMeta {
   frequency_hz?: number;
   modulation?: string;
   station_id?: string;
+  transmissions?: TransmissionAnnotation[];
+}
+
+export interface SpeechAnnotation { start_sec: number; end_sec: number; start_sample?: number; end_sample?: number }
+export interface TransmissionAnnotation {
+  id: number | string; start_sec: number; end_sec: number; start_sample?: number; end_sample?: number;
+  speaker?: string; speech_segments?: SpeechAnnotation[]; false_detection?: boolean;
 }
 
 export interface CalibrationState {
