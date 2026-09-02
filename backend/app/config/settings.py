@@ -34,6 +34,11 @@ class AppConfig(BaseModel):
     silence_seconds: float = Field(
         default=2.0, description="Silence hang time in seconds before stopping recording"
     )
+    auto_trim_silence: bool = Field(default=True, description="Trim dead air after recording")
+    trim_margin_seconds: float = Field(default=0.2, ge=0.0, le=2.0)
+    input_gain: float = Field(default=1.0, ge=0.1, le=8.0)
+    input_channel: Literal["auto", "channel_1", "channel_2"] = Field(default="auto")
+    auto_gain_control: bool = Field(default=False)
     
     # HackRF / GNU Radio configuration
     fifo_path: str = Field(

@@ -115,6 +115,8 @@ export default function App() {
           if (update.effective_gain !== undefined) setEffectiveGain(update.effective_gain);
           if (update.speech_probability !== undefined) setSpeechProb(update.speech_probability);
           if (update.voice_detected !== undefined) setVoiceDetected(Boolean(update.voice_detected));
+          if (Array.isArray(update.waveform)) setLiveWaveform(update.waveform);
+          if (Array.isArray(update.spectrum)) setSpectrum(update.spectrum);
           if (update.status) setStatus(update.status);
           if (update.error_message) setErrorMessage(update.error_message);
         } catch {
@@ -300,7 +302,6 @@ export default function App() {
         return (
           device.type === 'usb' ||
           device.type === 'line' ||
-          device.device_kind === 'hardware' ||
           nameLower.includes('usb') ||
           nameLower.includes('codec') ||
           nameLower.includes('sound') ||

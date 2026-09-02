@@ -1,5 +1,6 @@
 import queue
 import math
+import os
 import time
 from typing import Optional, List, Dict, Any
 import numpy as np
@@ -18,9 +19,11 @@ class MicrophoneSource(AudioSource):
     Audio input source capturing from system default or selected microphone via sounddevice.
     """
 
-    def __init__(self, device_id: Optional[int | str] = None, sample_rate: int = 16000):
+    def __init__(self, device_id: Optional[int | str] = None, sample_rate: int = 16000,
+                 input_channel: str = "auto"):
         super().__init__(sample_rate=sample_rate, channels=1)
         self.device_id = int(device_id) if isinstance(device_id, int) or (isinstance(device_id, str) and device_id.isdigit()) else None
+        self.input_channel = input_channel
         self._stream = None
         self._queue: queue.Queue = queue.Queue(maxsize=100)
         self.capture_sample_rate = sample_rate
@@ -114,9 +117,20 @@ class MicrophoneSource(AudioSource):
         if status:
             pass
         if self._is_active:
-            # Keep every input channel at capture time and downmix here.  A number
-            # of ALSA USB interfaces cannot be opened with channels=1.
-            mono_chunk = np.mean(indata, axis=1, dtype=np.float32) if indata.ndim > 1 else indata.copy()
+            # Do not average stereo interface inputs: balanced/opposite-polarity
+            # channels can cancel and many USB adapters only carry signal on one
+            # side. Auto follows the channel with the greatest RMS energy.
+            if indata.ndim > 1 and indata.shape[1] > 1:
+                if self.input_channel == "channel_1":
+                    channel_index = 0
+                elif self.input_channel == "channel_2":
+                    channel_index = min(1, indata.shape[1] - 1)
+                else:
+                    channel_rms = np.sqrt(np.mean(np.square(indata), axis=0))
+                    channel_index = int(np.argmax(channel_rms))
+                mono_chunk = indata[:, channel_index].copy()
+            else:
+                mono_chunk = indata.reshape(-1).copy()
             self.callback_frames += int(frames)
             self.last_callback_at = time.time()
             if self.last_callback_at - self._callback_log_at >= 5.0:
@@ -163,7 +177,8 @@ class MicrophoneSource(AudioSource):
         errors = []
         selected_channels = None
         print("[AUDIO] Checking input settings...")
-        for candidate_channels in dict.fromkeys([1, min(2, max_channels)]):
+        preferred_channels = min(2, max_channels) if self.input_channel != "channel_1" else 1
+        for candidate_channels in dict.fromkeys([preferred_channels, 1, min(2, max_channels)]):
             try:
                 sd.check_input_settings(device=self.device_id, samplerate=native_rate, channels=candidate_channels, dtype="float32")
                 selected_channels = candidate_channels

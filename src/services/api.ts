@@ -31,50 +31,8 @@ export const api = {
       // fallback
     }
 
-    // 2. Try same-origin /api/audio/devices (Port 3000 Node/Express or reverse proxy)
-    try {
-      const res = await fetch('/api/audio/devices');
-      if (res.ok) {
-        const data = (await res.json()) as AudioDevice[];
-        if (Array.isArray(data) && data.length > 0) {
-          return data;
-        }
-      }
-    } catch {
-      // fallback
-    }
-
-    // 3. Browser mediaDevices enumeration fallback if available
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices
-          .filter((d) => d.kind === 'audioinput')
-          .map((d, index) => {
-            const label = d.label || `Audio Input ${index + 1}`;
-            const isUsb = label.toLowerCase().includes('usb') || label.toLowerCase().includes('external') || label.toLowerCase().includes('codec');
-            const isLine = label.toLowerCase().includes('line');
-            return {
-              id: d.deviceId || `device-${index}`,
-              name: label,
-              max_input_channels: 2,
-              default_samplerate: 48000,
-              is_default: index === 0,
-              type: isUsb ? ('usb' as const) : isLine ? ('line' as const) : ('microphone' as const),
-              device_kind: isUsb ? ('hardware' as const) : ('default' as const),
-              hostapi: 'Browser/WebAudio',
-              available: true,
-            };
-          });
-
-        if (audioInputs.length > 0) {
-          return audioInputs;
-        }
-      } catch {
-        // ignore
-      }
-    }
-
+    // Browser device ids cannot be opened by the Python/PortAudio recorder.
+    // Returning no entries is preferable to displaying fictitious interfaces.
     return [];
   },
 
