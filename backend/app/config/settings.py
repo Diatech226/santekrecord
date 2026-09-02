@@ -30,7 +30,7 @@ class AppConfig(BaseModel):
         default=0.60, description="Silero VAD speech confidence trigger threshold (0.0 to 1.0)"
     )
     preroll_seconds: float = Field(
-        default=1.0, description="Circular buffer duration saved before trigger event"
+        default=0.5, description="Circular buffer duration saved before trigger event"
     )
     silence_seconds: float = Field(
         default=2.0, description="Silence hang time in seconds before stopping recording"
@@ -40,6 +40,22 @@ class AppConfig(BaseModel):
     input_gain: float = Field(default=1.0, ge=0.1, le=8.0)
     input_channel: Literal["auto", "channel_1", "channel_2"] = Field(default="auto")
     auto_gain_control: bool = Field(default=False)
+    detection_profile: Literal["radio_room", "general_voice"] = "radio_room"
+    adaptive_noise: bool = True
+    adaptive_threshold: bool = True
+    ambient_learning_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+    ambient_window_seconds: float = Field(default=20.0, ge=5.0, le=120.0)
+    noise_margin_db: float = Field(default=8.0, ge=1.0, le=30.0)
+    minimum_snr_db: float = Field(default=6.0, ge=0.0, le=30.0)
+    speech_band_low_hz: float = Field(default=250.0, ge=50.0)
+    speech_band_high_hz: float = Field(default=4000.0, ge=500.0)
+    vad_start_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    vad_stop_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    minimum_speech_ms: int = Field(default=160, ge=50, le=2000)
+    minimum_total_speech_ms: int = Field(default=300, ge=50, le=5000)
+    transmission_hangover_seconds: float = Field(default=2.0, ge=.3, le=15.0)
+    keep_internal_pause_ms: int = Field(default=1200, ge=0, le=5000)
+    trim_long_silence_ms: int = Field(default=1400, ge=100, le=10000)
     
     # HackRF / GNU Radio configuration
     fifo_path: str = Field(
