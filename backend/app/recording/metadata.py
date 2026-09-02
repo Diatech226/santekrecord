@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
 
@@ -38,6 +38,13 @@ class RecordingMetadata(BaseModel):
     trimmed_trailing_seconds: float = 0.0
     speech_segment_count: int = 0
     ambient_profile_version: int = 1
+    communication_id: Optional[str] = None
+    transmission_count: int = 0
+    transmissions: List[Dict[str, Any]] = Field(default_factory=list)
+    communication_end_reason: Optional[str] = None
+    total_speech_duration_seconds: float = 0.0
+    total_radio_activity_seconds: float = 0.0
+    inter_transmission_gap_seconds: List[float] = Field(default_factory=list)
 
 
 def save_metadata(meta: RecordingMetadata, output_dir: str = "recordings") -> str:

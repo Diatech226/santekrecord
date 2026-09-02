@@ -325,3 +325,30 @@ curl http://127.0.0.1:8000/api/audio/devices
 ```
 
 Après sélection de la carte USB et clic sur **Surveiller**, vérifiez la séquence `LEARNING AMBIENT` → `LISTENING`, puis `RADIO ACTIVITY` lors du squelch et `VOICE DETECTED` / `RECORDING` uniquement pendant la voix. Contrôlez enfin le WAV et son JSON dans `recordings/`.
+
+## Sessions de communication radio
+
+Le moteur archive maintenant une **communication** complète dans une seule paire
+`COM-YYYYMMDD-HHMMSS-XXX.wav/.json`. Une parole confirmée ouvre une transmission et
+la première transmission ouvre la session. Les pauses courtes (1,2 s par défaut)
+restent dans la transmission; après 3 s sans parole celle-ci est fermée, mais la
+session attend une réponse pendant 10 s. Elle n'est finalisée que lorsque le signal
+est revenu à l'ambiance, ou après la limite de sécurité de 300 s. Ces quatre valeurs
+sont configurables avec `intra_phrase_pause_seconds`,
+`transmission_end_timeout_seconds`, `communication_end_timeout_seconds` et
+`max_communication_seconds`; `silence_seconds` et `transmission_hangover_seconds`
+restent acceptés pour les anciennes configurations.
+
+Le WAV conserve tous les intervalles entre transmissions. Le JSON ajoute
+`communication_id`, `transmissions` (positions échantillon/seconde et segments de
+parole, sans identité de locuteur), les écarts entre transmissions, les durées
+cumulées et `communication_end_reason`, sans retirer les métadonnées historiques.
+
+Validation sur Kali Linux :
+
+```bash
+cd /workspace/santekrecord
+python -m pytest backend/tests -q
+npm run lint
+npm run build
+```
