@@ -50,6 +50,7 @@ class AppConfig(BaseModel):
     adaptive_noise: bool = True
     adaptive_threshold: bool = True
     ambient_learning_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+    ambient_learning_vad_max: float = Field(default=0.15, ge=0.0, le=0.5)
     ambient_window_seconds: float = Field(default=20.0, ge=5.0, le=120.0)
     noise_margin_db: float = Field(default=8.0, ge=1.0, le=30.0)
     minimum_snr_db: float = Field(default=6.0, ge=0.0, le=30.0)

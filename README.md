@@ -352,3 +352,21 @@ python -m pytest backend/tests -q
 npm run lint
 npm run build
 ```
+# Voice detection setup and validation
+
+`start_kali.sh` installs the pinned local Silero ONNX model once. Runtime model
+loading is offline-only. To provision it separately, run
+`python3 scripts/install_silero_vad.py`; set `SILERO_VAD_MODEL` to use another
+local path. If it is absent or invalid, monitoring continues with the adaptive
+acoustic fallback and exposes the cause in WebSocket diagnostics.
+
+Manual microphone validation:
+
+1. Start monitoring and wait for **LISTENING** without speaking.
+2. Say “Bonjour ceci est un test de voix”; verify probability rises, VOICE is
+   shown, and a communication becomes active.
+3. Pause, speak again, stop, wait for the communication timeout, then verify the
+   WAV and JSON files.
+4. Repeat but speak immediately after Start. Calibration must display
+   **CALIBRATION PAUSED - VOICE PRESENT**, must not advance learned ambient time,
+   and must resume automatically when the room is quiet.

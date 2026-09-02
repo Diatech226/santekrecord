@@ -8,19 +8,25 @@ try:
     import torch
 except ImportError:  # pragma: no cover - depends on installation
     torch = None
+try:
+    import onnxruntime as ort
+except ImportError:  # pragma: no cover
+    ort = None
 
 
 class SileroVADDetector:
     """Feeds Silero its documented 512-sample frames at 16 kHz.
 
-    Model loading never initiates a network request.  Put a torch-hub checkout in
-    its normal cache or set ``SILERO_VAD_REPO`` during installation.
+    Model loading never initiates a network request. A local ONNX model is
+    preferred; a local torch-hub checkout remains supported for compatibility.
     """
     frame_samples = 512
 
     def __init__(self, sample_rate=16000):
         self.sample_rate = sample_rate
         self.model = None
+        self._onnx_session = None
+        self._onnx_state = np.zeros((2, 1, 128), dtype=np.float32)
         self.vad_backend = "acoustic_fallback"
         self.vad_model_loaded = False
         self.vad_error = None
@@ -29,8 +35,19 @@ class SileroVADDetector:
         self._init_model()
 
     def _init_model(self):
+        model_path = Path(os.environ.get(
+            "SILERO_VAD_MODEL", Path(__file__).parents[2] / "models" / "silero_vad.onnx"))
+        if model_path.is_file() and ort is not None:
+            try:
+                self._onnx_session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+                self.vad_backend, self.vad_model_loaded = "silero_onnx", True
+                return
+            except Exception as exc:
+                self.vad_error = f"Silero ONNX load failed: {type(exc).__name__}: {exc}"
+        elif model_path.is_file():
+            self.vad_error = "onnxruntime is not installed; using acoustic fallback"
         if torch is None:
-            self.vad_error = "PyTorch is not installed; using acoustic fallback"
+            self.vad_error = self.vad_error or "Local Silero model unavailable; using acoustic fallback"
             return
         repo = os.environ.get("SILERO_VAD_REPO")
         if not repo:
@@ -43,7 +60,7 @@ class SileroVADDetector:
         try:
             self.model, _ = torch.hub.load(repo_or_dir=repo, model="silero_vad", source="local", onnx=False)
             self.model.eval()
-            self.vad_backend, self.vad_model_loaded = "silero", True
+            self.vad_backend, self.vad_model_loaded = "silero_torch", True
         except Exception as exc:
             self.vad_error = f"Silero load failed: {type(exc).__name__}: {exc}"
 
@@ -60,6 +77,22 @@ class SileroVADDetector:
         return float(np.mean(self._recent)) if self._recent else 0.0
 
     def _infer_frame(self, frame):
+        if self._onnx_session is not None:
+            try:
+                names = {item.name for item in self._onnx_session.get_inputs()}
+                feed = {"input": frame.reshape(1, -1)}
+                if "state" in names:
+                    feed["state"] = self._onnx_state
+                if "sr" in names:
+                    feed["sr"] = np.asarray(self.sample_rate, dtype=np.int64)
+                outputs = self._onnx_session.run(None, feed)
+                if len(outputs) > 1:
+                    self._onnx_state = outputs[1]
+                return float(np.clip(np.asarray(outputs[0]).reshape(-1)[0], 0, 1))
+            except Exception as exc:
+                self.vad_error = f"Silero ONNX inference failed: {type(exc).__name__}: {exc}"
+                self._onnx_session = None
+                self.vad_model_loaded, self.vad_backend = False, "acoustic_fallback"
         if self.model is not None:
             try:
                 with torch.no_grad():
@@ -71,14 +104,16 @@ class SileroVADDetector:
 
     def _acoustic_vad_fallback(self, chunk):
         rms = float(np.sqrt(np.mean(chunk ** 2)))
-        if rms < .003: return 0.0
         windowed = chunk * np.hanning(len(chunk))
         power = np.abs(np.fft.rfft(windowed)) ** 2
         freqs = np.fft.rfftfreq(len(chunk), 1 / self.sample_rate)
         ratio = float(power[(freqs >= 250) & (freqs <= 4000)].sum() / (power.sum() + 1e-12))
         zcr = float(np.mean(np.diff(np.signbit(chunk))))
         zcr_score = max(0., 1. - abs(zcr - .12) / .16)
-        return float(np.clip(.55 * ratio + .30 * zcr_score + .15 * min(1., rms * 20), 0, .92))
+        # No absolute RMS gate: spectral shape still recognizes quiet speech.
+        # The adaptive noise profile supplies the level/SNR evidence downstream.
+        level_score = np.clip((20 * np.log10(rms + 1e-8) + 80) / 50, 0, 1)
+        return float(np.clip(.58 * ratio + .30 * zcr_score + .12 * level_score, 0, .92))
 
     def diagnostics(self):
         return {"vad_backend": self.vad_backend, "vad_model_loaded": self.vad_model_loaded, "vad_error": self.vad_error}

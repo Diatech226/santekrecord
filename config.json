@@ -22,5 +22,14 @@
   "fifo_path": "/tmp/hackrf_audio.f32",
   "frequency_hz": 145000000,
   "modulation": "NFM",
-  "station_id": "ST001"
+  "station_id": "ST001",
+  "detection_profile": "general_voice",
+  "adaptive_noise": true,
+  "ambient_learning_seconds": 5.0,
+  "ambient_learning_vad_max": 0.15,
+  "minimum_snr_db": 3.0,
+  "vad_start_threshold": 0.5,
+  "vad_stop_threshold": 0.3,
+  "minimum_speech_ms": 120,
+  "minimum_total_speech_ms": 250
 }
