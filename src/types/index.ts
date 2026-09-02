@@ -92,6 +92,8 @@ export interface AppSettings {
   intra_phrase_pause_seconds?: number;
   transmission_end_timeout_seconds?: number;
   communication_end_timeout_seconds?: number;
+  ambient_confirm_ms?: number;
+  ambient_return_spectral_threshold?: number;
   max_communication_seconds?: number;
   // Auto Trim Dead Air / Silence Post-Processing
   auto_trim_silence?: boolean;
@@ -175,6 +177,10 @@ export interface MonitorUpdate {
   communication_duration_seconds?: number;
   time_since_last_speech?: number | null;
   session_state?: string;
+  transmission_state?: 'idle' | 'speech' | 'intra_phrase_pause' | 'transmission_hangover';
+  return_to_ambient?: boolean;
+  ambient_confirm_ms?: number;
+  quiet_seconds?: number;
 }
 
 export interface TrimInfo {
