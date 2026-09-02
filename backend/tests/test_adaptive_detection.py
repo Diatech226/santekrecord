@@ -93,7 +93,8 @@ def test_sample_bounded_preroll_and_minimum_total_speech(tmp_path):
 
 def test_one_transmission_one_file_and_trailing_hiss_trim(tmp_path):
     cfg = AppConfig(preroll_seconds=.5, minimum_speech_ms=128, minimum_total_speech_ms=300,
-                    transmission_hangover_seconds=.3, trim_margin_seconds=.2)
+                    transmission_hangover_seconds=.3, transmission_end_timeout_seconds=.3,
+                    communication_end_timeout_seconds=.5, trim_margin_seconds=.2)
     rec = AudioRecorderEngine(cfg, str(tmp_path))
     frame = 1024
     ambient = np.zeros(frame, np.float32)
@@ -105,6 +106,7 @@ def test_one_transmission_one_file_and_trailing_hiss_trim(tmp_path):
     for _ in range(3): rec.process_frame(ambient, -55, .02, speech_confirmed=False)
     for _ in range(8): rec.process_frame(voice(frame/SR), -28, .9, speech_confirmed=True, confidence=.9)
     for _ in range(6): rec.process_frame(noise(frame/SR, .02), -35, .05, speech_confirmed=False, radio_activity=True)
+    for _ in range(8): rec.process_frame(ambient, -55, .02, speech_confirmed=False, radio_activity=False)
     wavs = list(tmp_path.glob('*.wav'))
     assert len(wavs) == 1
     metadata = json.loads(next(tmp_path.glob('*.json')).read_text())

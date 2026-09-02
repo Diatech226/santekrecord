@@ -30,6 +30,13 @@ export const StatusIndicator: React.FC<Props> = ({ status, durationSec = 0 }) =>
           textClass: 'text-[#00F0FF] font-semibold',
           label: t.statusVoiceDetected,
         };
+      case 'communication_active':
+        return { dotClass: 'bg-[#FF4444] animate-pulse', textClass: 'text-[#FF4444] font-bold', label: `COMMUNICATION ACTIVE (${formatDuration(durationSec)})` };
+      case 'waiting_reply':
+      case 'transmission_hangover':
+        return { dotClass: 'bg-amber-400 animate-pulse', textClass: 'text-amber-400 font-semibold', label: 'WAITING FOR REPLY' };
+      case 'saving_communication':
+        return { dotClass: 'bg-[#00F0FF] animate-bounce', textClass: 'text-[#00F0FF]', label: 'SAVING COMMUNICATION' };
       case 'recording':
         return {
           dotClass: 'bg-[#FF4444] animate-pulse shadow-[0_0_8px_#FF4444]',

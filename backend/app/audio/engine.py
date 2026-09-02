@@ -324,6 +324,9 @@ class MainAudioEngine:
                              "snr_db": noise_metrics.broadband_snr_db,
                              "speech_band_snr_db": noise_metrics.speech_band_snr_db},
                     vad_backend=self.vad_detector.vad_backend,
+                    return_to_ambient=(noise_metrics.spectral_difference < .12 and
+                                       noise_metrics.broadband_snr_db < self.config.minimum_snr_db and
+                                       speech_prob < self.config.vad_stop_threshold),
                 )
                 self.current_status = "learning_ambient" if self.ambient_learning else status
                 self.current_voice_detected = voice_detected
@@ -400,6 +403,7 @@ class MainAudioEngine:
             "waveform": self.current_waveform,
             "spectrum": self.current_spectrum,
             "ambient_spectrum": self.current_ambient_spectrum,
+            **self.recorder.session_telemetry(),
             **self.vad_detector.diagnostics(),
         }
 

@@ -16,6 +16,10 @@ export type EngineStatus =
   | 'finalizing'
   | 'trimming'
   | 'saving'
+  | 'communication_active'
+  | 'transmission_hangover'
+  | 'waiting_reply'
+  | 'saving_communication'
   | 'error';
 
 export interface AudioDevice {
@@ -85,6 +89,10 @@ export interface AppSettings {
   vad_threshold: number;
   preroll_seconds: number;
   silence_seconds: number;
+  intra_phrase_pause_seconds?: number;
+  transmission_end_timeout_seconds?: number;
+  communication_end_timeout_seconds?: number;
+  max_communication_seconds?: number;
   // Auto Trim Dead Air / Silence Post-Processing
   auto_trim_silence?: boolean;
   trim_margin_seconds?: number;
@@ -160,6 +168,13 @@ export interface MonitorUpdate {
   alsa_device?: string | null;
   hostapi?: string;
   input_channel?: string;
+  communication_active?: boolean;
+  communication_id?: string | null;
+  current_transmission?: number;
+  transmission_count?: number;
+  communication_duration_seconds?: number;
+  time_since_last_speech?: number | null;
+  session_state?: string;
 }
 
 export interface TrimInfo {
