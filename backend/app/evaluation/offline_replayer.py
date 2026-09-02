@@ -66,12 +66,14 @@ class OfflineAudioReplayer:
                                      speech_band_high_hz=self.config.speech_band_high_hz)
         speech = SpeechDetector(self.config.vad_start_threshold, self.config.vad_stop_threshold,
                                 self.config.minimum_snr_db, self.config.minimum_speech_ms,
-                                frame_ms=self.frame_samples * 1000 / sample_rate)
+                                frame_ms=self.frame_samples * 1000 / sample_rate,
+                                profile=self.config.detection_profile)
         metadata, decisions, clock = [], [], {"sample": 0}
         with tempfile.TemporaryDirectory(prefix="santek-eval-") as output:
             recorder = AudioRecorderEngine(self.config, output,
                 lambda meta, _: metadata.append((meta.model_dump(), clock["sample"])))
             learning_samples = round(self.config.ambient_learning_seconds * sample_rate)
+            learned_samples = 0
             position = 0
             # A deterministic tail gives sample-clock state machines enough time to close.
             tail = round((self.config.transmission_end_timeout_seconds + self.config.communication_end_timeout_seconds + 1) * sample_rate)
@@ -85,13 +87,15 @@ class OfflineAudioReplayer:
                 spectrum = noise.spectrum(chunk)
                 _, dbfs = rms_detector.process_chunk(chunk)
                 probability = vad.get_speech_probability(chunk)
-                if position < learning_samples:
+                learning = (self.config.adaptive_noise and
+                            learned_samples < max(0, learning_samples - self.frame_samples))
+                if learning and probability < self.config.ambient_learning_vad_max:
                     noise.update(dbfs, spectrum)
+                    learned_samples += len(raw)
                 metrics = noise.analyse(dbfs, spectrum)
                 decision = speech.process(probability, dbfs, metrics.noise_floor_dbfs,
                                           metrics.broadband_snr_db, metrics.speech_band_snr_db,
                                           metrics.spectral_difference)
-                learning = position < learning_samples
                 ambient = (metrics.spectral_difference < self.config.ambient_return_spectral_threshold and
                            metrics.broadband_snr_db < self.config.minimum_snr_db and
                            probability < self.config.vad_stop_threshold and not decision.radio_activity)
