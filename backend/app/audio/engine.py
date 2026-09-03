@@ -70,6 +70,7 @@ class MainAudioEngine:
         self.started_at: Optional[float] = None
         self._noise_levels = collections.deque(maxlen=240)
         self._raw_ambient_levels = collections.deque(maxlen=240)
+        self._raw_ambient_quiet_bootstrap = collections.deque(maxlen=8)
         self.current_speech_prob = 0.0
         self.current_voice_detected = False
         self.current_status = "idle"
@@ -210,14 +211,30 @@ class MainAudioEngine:
 
     def _learn_raw_ambient(self, raw_dbfs: float, speech_probability: float,
                            decision, event_active: bool) -> None:
-        if speech_probability >= self.config.ambient_learning_vad_max:
+        verified_quiet = (
+            speech_probability < self.config.ambient_learning_vad_max
+            and not decision.is_candidate
+            and not decision.speech_confirmed
+            and not self.recorder.is_recording
+            and not event_active
+        )
+        if not verified_quiet:
+            self._raw_ambient_quiet_bootstrap.clear()
             return
-        if decision.is_candidate or decision.speech_confirmed or self.recorder.is_recording:
+
+        if len(self._raw_ambient_levels) < 8:
+            self._raw_ambient_quiet_bootstrap.append(float(raw_dbfs))
+            if len(self._raw_ambient_quiet_bootstrap) < 8:
+                return
+            self._raw_ambient_levels.extend(self._raw_ambient_quiet_bootstrap)
+            self._raw_ambient_quiet_bootstrap.clear()
+            self.raw_noise_floor_dbfs = round(self._raw_ambient_baseline(raw_dbfs), 1)
             return
+
         baseline = self._raw_ambient_baseline(raw_dbfs)
-        # Bootstrap freely, then reject significant upward departures. Downward
-        # changes are safe and let the estimator follow a quieter environment.
-        if len(self._raw_ambient_levels) < 8 or raw_dbfs <= baseline + 3.0 or not event_active:
+        # Reject significant upward departures. Downward changes are safe and
+        # let the estimator follow a quieter environment.
+        if raw_dbfs <= baseline + 3.0:
             self._raw_ambient_levels.append(float(raw_dbfs))
             self.raw_noise_floor_dbfs = round(self._raw_ambient_baseline(raw_dbfs), 1)
 
@@ -365,6 +382,7 @@ class MainAudioEngine:
         self.speech_detector.reset()
         self.event_gate.reset()
         self._raw_ambient_levels.clear()
+        self._raw_ambient_quiet_bootstrap.clear()
         self.raw_noise_floor_dbfs = -90.0
         self.ambient_learned_samples = 0
         self._ambient_device_name = getattr(self.source, "device_name", None) or self.config.device_name
@@ -522,6 +540,8 @@ class MainAudioEngine:
                 self.effective_speech_confirmed = record_authorized
                 self._learn_raw_ambient(
                     self.raw_level_dbfs, speech_prob, decision, event.event_active)
+                # Deprecated metadata alias only; never participates in the
+                # recorder authorization computed above.
                 cold_start_voice = bool(
                     self.cold_start_mode_active and self.cold_start_voice_triggered
                 )
@@ -663,6 +683,8 @@ class MainAudioEngine:
             "ambient_learning": self.ambient_learning,
             "ambient_learned_seconds": round(self.ambient_learned_samples / self.config.sample_rate, 3),
             "ambient_learning_vad_max": self.config.ambient_learning_vad_max,
+            # Deprecated compatibility telemetry. These aliases report legacy
+            # state but are not inputs to the recording decision.
             "cold_start_voice_active": self.cold_start_voice_active,
             "cold_start_mode_active": self.cold_start_mode_active,
             "cold_start_voice_triggered": self.cold_start_voice_triggered,

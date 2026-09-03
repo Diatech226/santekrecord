@@ -80,3 +80,36 @@ def test_effective_confirmation_is_exact_confirmed_voice_alias(tmp_path):
     decision = SimpleNamespace(speech_confirmed=True, is_candidate=True)
     assert engine._effective_confirmation(decision, .5)
     assert engine.effective_speech_confirmed
+
+
+def quiet_decision():
+    return SimpleNamespace(is_candidate=False, speech_confirmed=False)
+
+
+def voice_decision():
+    return SimpleNamespace(is_candidate=True, speech_confirmed=True)
+
+
+def test_raw_ambient_bootstrap_ignores_voice_frames(tmp_path):
+    engine = MainAudioEngine(AppConfig(), str(tmp_path))
+    for probability in (.80, .90, .70):
+        engine._learn_raw_ambient(-28, probability, voice_decision(), event_active=True)
+    assert not engine._raw_ambient_levels
+
+    for _ in range(8):
+        engine._learn_raw_ambient(-58, .02, quiet_decision(), event_active=False)
+    assert len(engine._raw_ambient_levels) == 8
+    assert engine.raw_noise_floor_dbfs == -58
+
+
+def test_voice_immediately_after_start_is_not_learned_as_ambient(tmp_path):
+    engine = MainAudioEngine(AppConfig(), str(tmp_path))
+    decision = voice_decision()
+    engine._learn_raw_ambient(-25, .90, decision, event_active=True)
+    authorized = engine._effective_confirmation(decision, .90)
+    _status, voice, recording = engine.recorder.process_frame(
+        np.full(FRAME, .05, np.float32), -25, .90,
+        speech_confirmed=authorized, event_active=True,
+    )
+    assert not engine._raw_ambient_levels
+    assert authorized and voice and recording

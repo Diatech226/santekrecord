@@ -56,6 +56,7 @@ export const api = {
     }
 
     return {
+      config_version: 2,
       source: 'microphone',
       device_id: null,
       device_name: undefined,
@@ -71,6 +72,18 @@ export const api = {
       input_gain: 1.0,
       input_channel: 'auto',
       auto_gain_control: false,
+      detection_profile: 'voice_any_source',
+      adaptive_noise: true,
+      adaptive_threshold: true,
+      ambient_learning_seconds: 3,
+      ambient_learning_vad_max: 0.15,
+      ambient_window_seconds: 20,
+      noise_margin_db: 8,
+      minimum_snr_db: 6,
+      vad_start_threshold: 0.65,
+      vad_stop_threshold: 0.35,
+      minimum_speech_ms: 160,
+      minimum_total_speech_ms: 300,
       frequency_hz: 145000000,
       modulation: 'NFM',
       station_id: 'ST001',

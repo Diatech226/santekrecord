@@ -28,6 +28,7 @@ export default function App() {
 
   // Application State
   const [settings, setSettings] = useState<AppSettings>({
+    config_version: 2,
     source: 'microphone',
     device_id: null,
     audio_backend: 'auto',
@@ -37,22 +38,24 @@ export default function App() {
     vad_threshold: 0.6,
     preroll_seconds: 1.5,
     silence_seconds: 2.0,
+    input_gain: 1.0,
+    auto_gain_control: false,
     // Bootstrap values mirror config.json only until the backend response arrives.
     detection_profile: 'voice_any_source',
     adaptive_noise: true,
     adaptive_threshold: true,
-    ambient_learning_seconds: 5,
+    ambient_learning_seconds: 3,
     ambient_learning_vad_max: .15,
     cold_start_vad_threshold: .75,
     ambient_window_seconds: 20,
     noise_margin_db: 8,
-    minimum_snr_db: 3,
+    minimum_snr_db: 6,
     speech_band_low_hz: 250,
     speech_band_high_hz: 4000,
-    vad_start_threshold: .5,
-    vad_stop_threshold: .3,
-    minimum_speech_ms: 120,
-    minimum_total_speech_ms: 250,
+    vad_start_threshold: .65,
+    vad_stop_threshold: .35,
+    minimum_speech_ms: 160,
+    minimum_total_speech_ms: 300,
     transmission_hangover_seconds: 2,
     keep_internal_pause_ms: 1200,
     frequency_hz: 145000000,
@@ -770,7 +773,7 @@ export default function App() {
 
               {isMonitoring && (() => {
                 const vadOn = (telemetry?.vad_smoothed_probability ?? 0) >=
-                  (telemetry?.effective_vad_start_threshold ?? .5);
+                  (telemetry?.effective_vad_start_threshold ?? .65);
                 const badges = [
                   ['EVENT', Boolean(telemetry?.event_active)],
                   ['VOICE', Boolean(telemetry?.effective_speech_confirmed)],

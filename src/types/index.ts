@@ -79,6 +79,7 @@ export interface UsbTroubleshootResult {
 }
 
 export interface AppSettings {
+  config_version?: number;
   source: AudioSourceType;
   device_id: number | string | null;
   device_name?: string;

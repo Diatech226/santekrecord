@@ -6,7 +6,7 @@ from backend.app.audio.engine import MainAudioEngine
 from backend.app.config.settings import AppConfig
 
 
-def engine(tmp_path, profile="general_voice"):
+def engine(tmp_path, profile="voice_any_source"):
     result = MainAudioEngine(
         AppConfig(detection_profile=profile, cold_start_vad_threshold=.75),
         recordings_dir=str(tmp_path / "recordings"),
