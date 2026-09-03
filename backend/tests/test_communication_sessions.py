@@ -107,7 +107,7 @@ def test_stable_ambient_plus_session_timeout_closes_communication(tmp_path):
     assert not rec.is_recording
 
 
-def test_realistic_talkie_two_transmissions_one_communication(tmp_path):
+def test_radio_carrier_does_not_keep_a_voice_communication_open(tmp_path):
     rec = AudioRecorderEngine(config(), str(tmp_path))
     feed(rec, 1, False, False)          # learned room ambience / pre-roll
     feed(rec, 2, True, True, .2)
@@ -120,10 +120,10 @@ def test_realistic_talkie_two_transmissions_one_communication(tmp_path):
     feed(rec, 2, True, True, .3)
     feed(rec, 12, False, False)
 
-    metadata = json.loads(next(tmp_path.glob("*.json")).read_text())
-    assert metadata["transmission_count"] == 2
-    assert [len(item["speech_segments"]) for item in metadata["transmissions"]] == [2, 1]
-    assert all(item["speaker"] is None for item in metadata["transmissions"])
+    metadata = [json.loads(path.read_text()) for path in tmp_path.glob("*.json")]
+    assert len(metadata) == 2
+    assert [item["transmission_count"] for item in metadata] == [1, 1]
+    assert all(tx["speaker"] is None for item in metadata for tx in item["transmissions"])
 
 
 def test_multiple_transmissions_one_wav_and_metadata_and_internal_gaps(tmp_path):

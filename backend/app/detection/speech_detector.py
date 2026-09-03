@@ -32,12 +32,8 @@ class DetectionProfile:
                   speech_band_snr_db, spectral_change):
         if probability < vad_limit:
             return False, "vad_too_low"
-        if probability >= self.high_vad_override:
-            return True, "candidate_waiting_confirmation"
-        if snr_db < minimum_snr:
-            return False, "snr_too_low"
-        if self.use_radio_features and speech_band_snr_db < minimum_snr and spectral_change < .18:
-            return False, "radio_features_too_low"
+        # Silero is the voice classifier. Level/SNR and radio signatures remain
+        # useful confidence diagnostics, but never veto a positive VAD decision.
         return True, "candidate_waiting_confirmation"
 
     def radio_score(self, snr_db, speech_band_snr_db, spectral_change, minimum_snr):
@@ -55,19 +51,20 @@ class DetectionProfile:
         return max(0.0, min(1.0, .65 * signature + .20 * band + .15 * snr))
 
 
-RADIO_ROOM = DetectionProfile("radio_room", .85, True)
-GENERAL_VOICE = DetectionProfile("general_voice", .80, False)
-PROFILES = {profile.name: profile for profile in (RADIO_ROOM, GENERAL_VOICE)}
+VOICE_ANY_SOURCE = DetectionProfile("voice_any_source", .80, False)
+RADIO_ROOM = DetectionProfile("radio_room", .80, True)  # compatibility/metadata alias
+GENERAL_VOICE = DetectionProfile("general_voice", .80, False)  # compatibility alias
+PROFILES = {profile.name: profile for profile in (VOICE_ANY_SOURCE, RADIO_ROOM, GENERAL_VOICE)}
 
 
 class SpeechDetector:
     def __init__(self, vad_start_threshold=.65, vad_continue_threshold=.35,
                  minimum_snr_db=6.0, minimum_speech_ms=160, frame_ms=64,
-                 profile="radio_room"):
-        self.profile = PROFILES.get(profile, RADIO_ROOM)
+                 profile="voice_any_source"):
+        self.profile = PROFILES.get(profile, VOICE_ANY_SOURCE)
         # General voice has intentionally conversation-friendly defaults, but an
         # explicitly more permissive configured value is still respected.
-        if self.profile is GENERAL_VOICE:
+        if self.profile in (GENERAL_VOICE, VOICE_ANY_SOURCE, RADIO_ROOM):
             vad_start_threshold = min(vad_start_threshold, .50)
             vad_continue_threshold = min(vad_continue_threshold, .30)
             minimum_snr_db = min(minimum_snr_db, 3.0)

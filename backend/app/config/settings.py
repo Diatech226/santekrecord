@@ -30,7 +30,7 @@ class AppConfig(BaseModel):
         default=0.60, description="Silero VAD speech confidence trigger threshold (0.0 to 1.0)"
     )
     preroll_seconds: float = Field(
-        default=0.5, description="Circular buffer duration saved before trigger event"
+        default=1.5, description="Circular buffer duration saved before trigger event"
     )
     silence_seconds: float = Field(
         default=2.0, description="Silence hang time in seconds before stopping recording"
@@ -46,10 +46,10 @@ class AppConfig(BaseModel):
     input_gain: float = Field(default=1.0, ge=0.1, le=8.0)
     input_channel: Literal["auto", "channel_1", "channel_2"] = Field(default="auto")
     auto_gain_control: bool = Field(default=False)
-    detection_profile: Literal["radio_room", "general_voice"] = "radio_room"
+    detection_profile: Literal["voice_any_source", "radio_room", "general_voice"] = "voice_any_source"
     adaptive_noise: bool = True
     adaptive_threshold: bool = True
-    ambient_learning_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+    ambient_learning_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     ambient_learning_vad_max: float = Field(default=0.15, ge=0.0, le=0.5)
     cold_start_vad_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
     ambient_window_seconds: float = Field(default=20.0, ge=5.0, le=120.0)

@@ -33,8 +33,8 @@ def test_general_voice_normal_conversation():
     assert decide("general_voice", .72, 4).speech_confirmed
 
 
-def test_radio_room_remains_stricter():
-    assert not decide("radio_room", .72, 4).is_candidate
+def test_radio_room_alias_does_not_veto_voice():
+    assert decide("radio_room", .72, 4).is_candidate
 
 
 def test_silero_backend_status(monkeypatch, tmp_path):
@@ -75,13 +75,13 @@ def test_reject_reason_vad_low():
     assert decide("general_voice", .2, 10).reject_reason == "vad_too_low"
 
 
-def test_reject_reason_snr_low():
-    assert decide("general_voice", .72, 1).reject_reason == "snr_too_low"
+def test_low_snr_is_diagnostic_not_a_voice_veto():
+    assert decide("general_voice", .72, 1).speech_confirmed
 
 
-def test_profile_switch_changes_detector_behavior():
+def test_profile_switch_does_not_change_voice_authorization():
     assert decide("general_voice", .72, 4).speech_confirmed
-    assert not decide("radio_room", .72, 4).speech_confirmed
+    assert decide("radio_room", .72, 4).speech_confirmed
 
 
 def radio_decision(vad, snr, band_snr, spectral_change, frames=3):

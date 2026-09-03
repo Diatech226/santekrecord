@@ -29,6 +29,7 @@ class AudioRecorderEngine:
         self.sample_rate = config.sample_rate
         self.pre_buffer, self.recorded_chunks = deque(), []
         self.pre_buffer_samples = self.total_samples = 0
+        self.event_buffer_samples = 0
         self.is_recording = False
         self.current_status = "idle"
         self.metrics = []
@@ -67,18 +68,23 @@ class AudioRecorderEngine:
             self.pre_buffer_samples -= len(self.pre_buffer.popleft())
 
     def process_frame(self, chunk, level_dbfs, speech_prob, *, speech_confirmed=None,
-                      candidate=False, radio_activity=False, confidence=None, metrics=None,
+                      candidate=False, event_active=False, radio_activity=False, confidence=None, metrics=None,
                       vad_backend="unknown", return_to_ambient=None):
         chunk = np.asarray(chunk, dtype=np.float32)
         if speech_confirmed is None:
-            speech_confirmed = level_dbfs >= self.config.threshold_dbfs and speech_prob >= self.config.vad_threshold
+            speech_confirmed = speech_prob >= self.config.vad_threshold
         if return_to_ambient is None:
-            return_to_ambient = not radio_activity and not speech_confirmed and speech_prob <= self.config.vad_stop_threshold
+            return_to_ambient = not speech_confirmed and speech_prob <= self.config.vad_stop_threshold
         self._push_prebuffer(chunk)
 
         if not self.is_recording:
             if not speech_confirmed:
-                self.current_status = "signal_candidate" if candidate or radio_activity else "listening"
+                # The circular pre-roll is the temporary event buffer. It is
+                # promoted only by confirmed human voice and otherwise expires.
+                self.event_buffer_samples = self.event_buffer_samples + len(chunk) if event_active else 0
+                timeout = int(3.0 * self.sample_rate)
+                self.current_status = ("event_discarded" if self.event_buffer_samples >= timeout
+                                       else "event_active" if event_active else "listening")
                 return self.current_status, False, False
             communication_id, start_iso = self._new_id()
             self.recorded_chunks = [x.copy() for x in self.pre_buffer]
@@ -86,6 +92,7 @@ class AudioRecorderEngine:
             self.session_start_sample = 0
             self.session_manager.open(communication_id, start_iso, 0)
             self.is_recording = True
+            self.event_buffer_samples = 0
             self.metrics = []
             self._vad_backend = vad_backend
             start, end = self.total_samples - len(chunk), self.total_samples
@@ -106,18 +113,17 @@ class AudioRecorderEngine:
             spectral_change >= self.config.ambient_return_spectral_threshold and
             snr_db >= self.config.minimum_snr_db))
         self.meaningful_radio_samples = self.meaningful_radio_samples + len(chunk) if radio_evidence else 0
-        meaningful_radio_activity = bool(speech_confirmed) or (
-            self.meaningful_radio_samples >= int(self.config.ambient_confirm_ms * self.sample_rate / 1000))
+        meaningful_radio_activity = bool(speech_confirmed)
         transmission_id = len(self.session_manager.session.transmissions) + 1
         closed = self.transmission_manager.process(
-            start, end, bool(speech_confirmed), radio_activity, return_to_ambient, transmission_id)
+            start, end, bool(speech_confirmed), False, return_to_ambient, transmission_id)
         if closed:
             self.session_manager.add(closed)
         elif speech_confirmed:
             self.session_manager.state = SessionState.TRANSMISSION_ACTIVE
 
         reason = self.session_manager.observe(
-            end, bool(speech_confirmed), radio_activity, return_to_ambient, self.session_start_sample,
+            end, bool(speech_confirmed), False, return_to_ambient, self.session_start_sample,
             meaningful_radio_activity=meaningful_radio_activity,
             transmission_active=self.transmission_manager.current is not None)
         if reason:
@@ -145,7 +151,10 @@ class AudioRecorderEngine:
         if speech_samples < int(self.config.minimum_total_speech_ms * self.sample_rate / 1000):
             self._clear(); return
         all_segments = [[s.start_sample, s.end_sample] for t in session.transmissions for s in t.speech_segments]
-        result = (trim_to_speech(raw, all_segments, self.sample_rate, self.config.trim_margin_seconds)
+        # Retain the circular lead-in so delayed VAD confirmation cannot clip
+        # the beginning of a word or phrase.
+        trim_margin = max(self.config.trim_margin_seconds, self.config.preroll_seconds)
+        result = (trim_to_speech(raw, all_segments, self.sample_rate, trim_margin)
                   if self.config.auto_trim_silence else trim_to_speech(raw, [[0, len(raw)]], self.sample_rate, 0))
         if not len(result.samples):
             self._clear(); return
@@ -201,6 +210,7 @@ class AudioRecorderEngine:
         self.recorded_chunks = []; self.total_samples = 0; self.metrics = []
         self.transmission_manager.reset(); self.segmenter.reset(); self.radio_activity_samples = 0
         self.meaningful_radio_samples = 0; self.is_recording = False
+        self.event_buffer_samples = 0
 
     def session_telemetry(self):
         session = self.session_manager.session

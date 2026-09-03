@@ -45,16 +45,12 @@ export const SettingsPanel: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Detection Mode */}
+        {/* The primary product mode is intentionally source-agnostic. */}
         <div className="space-y-1.5">
-          <label htmlFor="detection-profile-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">Detection profile</label>
-          <select id="detection-profile-select" disabled={disabled}
-            value={settings.detection_profile ?? 'radio_room'}
-            onChange={(e) => onUpdateSettings({ detection_profile: e.target.value as 'general_voice' | 'radio_room' })}
-            className="w-full text-xs bg-[#151619] border border-[#2A2B2F] text-[#E0E0E0] rounded p-2 focus:outline-none focus:border-[#00F0FF] disabled:opacity-50">
-            <option value="general_voice">General Voice</option>
-            <option value="radio_room">Radio Room</option>
-          </select>
+          <div className="text-[10px] text-[#A0A0A0] uppercase tracking-wider">Recording mode</div>
+          <div className="w-full text-xs bg-[#151619] border border-[#00F0FF]/40 text-[#00F0FF] rounded p-2">
+            AUTO VOICE RECORDING · ANY SOURCE
+          </div>
         </div>
 
         <div className="space-y-1.5">

@@ -524,7 +524,7 @@ def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
 
 @router.post("/calibrate")
 def calibrate_noise(engine=Depends(get_engine)):
-    result = engine.calibrate_noise_floor(duration_sec=5.0)
+    result = engine.calibrate_noise_floor(duration_sec=3.0)
     return result
 
 
