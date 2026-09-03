@@ -28,9 +28,9 @@ def test_update_config_rebuilds_speech_detector(tmp_path):
 
 def test_profile_change_is_effective_after_save(tmp_path):
     engine = MainAudioEngine(config(detection_profile="radio_room"), ambient_profiles_dir=tmp_path)
-    engine.update_config(config(detection_profile="general_voice"))
-    assert engine.get_effective_detection_config()["detection_profile"] == "general_voice"
-    assert engine.speech_detector.profile.name == "general_voice"
+    engine.update_config(config(detection_profile="voice_any_source"))
+    assert engine.get_effective_detection_config()["detection_profile"] == "voice_any_source"
+    assert engine.speech_detector.profile.name == "voice_any_source"
 
 
 def test_snr_change_is_effective_after_save(tmp_path):
@@ -140,14 +140,14 @@ def test_different_channel_does_not_reuse_profile(tmp_path):
 
 def test_different_detection_profile_does_not_reuse_profile(tmp_path):
     store = AmbientProfileStore(tmp_path)
-    cfg = config(detection_profile="general_voice")
+    cfg = config(detection_profile="voice_any_source")
     store.save(cfg, learned_profile(), cfg.device_name)
     assert store.load(config(detection_profile="radio_room"), cfg.device_name) is None
 
 
 def test_profile_change_does_not_load_other_profiles_cache(tmp_path):
     store = AmbientProfileStore(tmp_path)
-    general = config(detection_profile="general_voice")
+    general = config(detection_profile="voice_any_source")
     store.save(general, learned_profile(), general.device_name)
     engine = MainAudioEngine(general, ambient_profiles_dir=tmp_path)
     engine.update_config(config(detection_profile="radio_room"))

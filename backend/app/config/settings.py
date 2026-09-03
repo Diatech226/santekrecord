@@ -24,15 +24,6 @@ class AppConfig(BaseModel):
     sample_rate: int = Field(
         default=16000, description="Sampling rate in Hz (standard 16000 for VAD and Whisper)"
     )
-    trigger_mode: Literal["db_vad", "db_only", "vad_only"] = Field(
-        default="db_vad", description="Voice detection algorithm mode"
-    )
-    threshold_dbfs: float = Field(
-        default=-38.0, description="Minimum RMS level in dBFS to qualify as signal"
-    )
-    vad_threshold: float = Field(
-        default=0.60, description="Silero VAD speech confidence trigger threshold (0.0 to 1.0)"
-    )
     preroll_seconds: float = Field(
         default=1.5, description="Circular buffer duration saved before trigger event"
     )
@@ -50,15 +41,11 @@ class AppConfig(BaseModel):
     input_gain: float = Field(default=1.0, ge=0.1, le=8.0)
     input_channel: Literal["auto", "channel_1", "channel_2"] = Field(default="auto")
     auto_gain_control: bool = Field(default=False)
-    detection_profile: Literal["voice_any_source", "radio_room", "general_voice"] = "voice_any_source"
+    detection_profile: Literal["voice_any_source", "radio_room"] = "voice_any_source"
     adaptive_noise: bool = True
     adaptive_threshold: bool = True
     ambient_learning_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     ambient_learning_vad_max: float = Field(default=0.15, ge=0.0, le=0.5)
-    cold_start_vad_threshold: float = Field(
-        default=0.75, ge=0.0, le=1.0,
-        description="Deprecated telemetry compatibility value; never authorizes recording",
-    )
     ambient_window_seconds: float = Field(default=20.0, ge=5.0, le=120.0)
     noise_margin_db: float = Field(default=8.0, ge=1.0, le=30.0)
     minimum_snr_db: float = Field(default=6.0, ge=0.0, le=30.0)
@@ -87,37 +74,25 @@ class AppConfig(BaseModel):
     )
 
 
-def _migrate_config(data: dict) -> tuple[dict, bool]:
-    """Apply narrowly scoped, versioned product-default migrations."""
-    migrated = dict(data)
-    version = migrated.get("config_version", 1)
-    changed = "config_version" not in migrated
-
-    if version < 2:
-        legacy_defaults = {
-            "detection_profile": ("general_voice", "voice_any_source"),
-            "preroll_seconds": (1.0, 1.5),
-            "ambient_learning_seconds": (5.0, 3.0),
-        }
-        for field, (old_default, new_default) in legacy_defaults.items():
-            if field not in migrated or migrated[field] == old_default:
-                migrated[field] = new_default
-                changed = True
-        migrated["config_version"] = 2
-        changed = True
-
-    return migrated, changed
+class UnsupportedConfigVersionError(ValueError):
+    """Raised when a configuration requires a newer SantekRecord schema."""
 
 
 def load_config() -> AppConfig:
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data, migrated = _migrate_config(json.load(f))
-                config = AppConfig(**data)
-                if migrated:
-                    save_config(config)
-                return config
+                data = json.load(f)
+                version = data.get("config_version", CURRENT_CONFIG_VERSION)
+                if version > CURRENT_CONFIG_VERSION:
+                    raise UnsupportedConfigVersionError(
+                        f"Configuration version {version} is newer than supported version "
+                        f"{CURRENT_CONFIG_VERSION}. Please update SantekRecord."
+                    )
+                return AppConfig(**data)
+        except UnsupportedConfigVersionError:
+            # Never replace or downgrade a file written by a newer application.
+            raise
         except Exception as e:
             print(f"[Config] Error loading {CONFIG_PATH}: {e}. Using defaults.")
     

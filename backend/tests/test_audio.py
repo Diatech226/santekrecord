@@ -162,13 +162,14 @@ def test_diagnostics_detect_signal_present_but_vad_inactive(tmp_path):
 
 
 def test_diagnostics_identifies_speech_detector_rejection(tmp_path):
-    engine = MainAudioEngine(AppConfig(detection_profile="general_voice"), str(tmp_path))
+    engine = MainAudioEngine(AppConfig(detection_profile="voice_any_source"), str(tmp_path))
     engine.current_level_dbfs, engine.current_peak_dbfs = -35, -20
     engine.current_speech_prob = .72
     engine.current_speech_candidate = False
     engine.current_speech_reject_reason = "snr_too_low"
+    engine.raw_ambient_ready = True
     telemetry = engine.get_telemetry()
-    assert telemetry["voice_pipeline_diagnosis"] == "snr_too_low"
+    assert telemetry["voice_pipeline_diagnosis"] == "vad_inactive"
     assert telemetry["voice_pipeline_hint"] == "SpeechDetector rejection: snr_too_low"
 
 

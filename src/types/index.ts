@@ -1,6 +1,5 @@
 export type AudioSourceType = 'microphone' | 'usb' | 'gnuradio';
 
-export type DetectionMode = 'db_vad' | 'db_only' | 'vad_only';
 
 export type EngineStatus =
   | 'idle'
@@ -85,9 +84,6 @@ export interface AppSettings {
   device_name?: string;
   audio_backend?: 'auto' | 'portaudio' | 'alsa';
   sample_rate: number;
-  trigger_mode: DetectionMode;
-  threshold_dbfs: number;
-  vad_threshold: number;
   preroll_seconds: number;
   silence_seconds: number;
   intra_phrase_pause_seconds?: number;
@@ -104,12 +100,11 @@ export interface AppSettings {
   input_channel?: 'auto' | 'channel_1' | 'channel_2';
   // Automatic Gain Control (AGC) based on ambient noise floor measurements
   auto_gain_control?: boolean;
-  detection_profile?: 'voice_any_source' | 'radio_room' | 'general_voice';
+  detection_profile?: 'voice_any_source' | 'radio_room';
   adaptive_noise?: boolean;
   adaptive_threshold?: boolean;
   ambient_learning_seconds?: number;
   ambient_learning_vad_max?: number;
-  cold_start_vad_threshold?: number;
   ambient_window_seconds?: number;
   noise_margin_db?: number;
   minimum_snr_db?: number;
@@ -142,14 +137,15 @@ export interface MonitorUpdate {
   peak_dbfs?: number;
   rms_dbfs?: number;
   noise_floor_dbfs?: number;
-  raw_noise_floor_dbfs?: number;
-  event_delta_db?: number;
+  raw_noise_floor_dbfs?: number | null;
+  raw_ambient_ready?: boolean;
+  event_delta_db?: number | null;
   threshold_dbfs?: number;
   dynamic_threshold_dbfs?: number;
   event_active?: boolean;
-  event_start_threshold_dbfs?: number;
-  event_continue_threshold_dbfs?: number;
-  event_end_threshold_dbfs?: number;
+  event_start_threshold_dbfs?: number | null;
+  event_continue_threshold_dbfs?: number | null;
+  event_end_threshold_dbfs?: number | null;
   snr_db?: number;
   speech_band_snr_db?: number;
   spectral_change?: number;
@@ -159,7 +155,6 @@ export interface MonitorUpdate {
   vad_backend?: string;
   vad_model_loaded?: boolean;
   vad_error?: string | null;
-  cold_start_voice_active?: boolean;
   effective_speech_confirmed?: boolean;
   ambient_learning_paused_for_voice?: boolean;
   speech_candidate?: boolean;
@@ -171,7 +166,7 @@ export interface MonitorUpdate {
   ambient_profile_age_seconds?: number | null;
   ambient_profile_key?: string;
   ambient_profile_source?: 'cached' | 'learning';
-  detection_profile?: 'voice_any_source' | 'radio_room' | 'general_voice';
+  detection_profile?: 'voice_any_source' | 'radio_room';
   configured_vad_start_threshold?: number;
   configured_vad_stop_threshold?: number;
   configured_minimum_snr_db?: number;
@@ -251,8 +246,8 @@ export interface RecordingMeta {
   is_trimmed?: boolean;
   trimmed_dead_air_sec?: number;
   trim_info?: TrimInfo;
-  trigger_mode: DetectionMode;
-  trigger_threshold_dbfs: number;
+  trigger_mode: string;
+  trigger_threshold_dbfs: number | null;
   vad_threshold: number;
   annotation_status: string;
   upload_status: string;

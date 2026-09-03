@@ -250,9 +250,9 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
   "timestamp_start": "2026-08-30T11:52:33.120Z",
   "timestamp_end": "2026-08-30T11:52:47.450Z",
   "duration_seconds": 14.3,
-  "trigger_mode": "db_vad",
-  "trigger_threshold_dbfs": -38.0,
-  "vad_threshold": 0.60,
+  "trigger_mode": "confirmed_voice",
+  "trigger_threshold_dbfs": null,
+  "vad_threshold": 0.65,
   "annotation_status": "pending",
   "upload_status": "pending",
   "frequency_hz": 145000000,
@@ -298,8 +298,11 @@ Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmé
 
 | Paramètre | Défaut |
 |---|---:|
+| `config_version` | `2` |
 | `detection_profile` | `voice_any_source` |
+| `sample_rate` | `16000` |
 | `ambient_learning_seconds` | `3.0` d'audio calme vérifié |
+| `ambient_learning_vad_max` | `0.15` |
 | `ambient_window_seconds` | `20.0` |
 | `noise_margin_db` | `8.0` |
 | `minimum_snr_db` | `6.0` |
@@ -309,8 +312,20 @@ Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmé
 | `preroll_seconds` | `1.5` |
 | `transmission_hangover_seconds` | `2.0` |
 | `trim_margin_seconds` | `0.2` |
+| `input_gain` / `auto_gain_control` | `1.0` / `false` |
+| `input_channel` | `auto` |
 
-`config_version: 2` rend ces valeurs canoniques persistantes. Au premier chargement d'un fichier sans version (v1), seuls les anciens defaults connus (`general_voice`, pré-roll `1.0`, apprentissage `5.0`) sont migrés puis sauvegardés ; toute autre valeur personnalisée est conservée. `general_voice` et `radio_room` restent des aliases compatibles, mais ne sont plus des defaults produit.
+`config.json` et `AppConfig` définissent directement le schéma canonique neuf de
+version 2. Il n'existe aucune migration legacy. Une version supérieure est
+refusée explicitement, sans réécriture du fichier, afin d'exiger la mise à jour
+de SantekRecord.
+
+Au démarrage, RAW AMBIENT reste `LEARNING` (valeur `null`) jusqu'à huit trames
+calmes consécutives et stables (environ 0,5 s). Une candidature vocale, un VAD
+au-dessus de 0,15, un enregistrement ou une fenêtre RMS modulée invalide cette
+fenêtre. L'apprentissage de trois secondes compte exclusivement l'audio calme
+vérifié. Silero et SpeechDetector continuent néanmoins immédiatement : une voix
+confirmée enregistre même lorsque RAW AMBIENT n'est pas encore prêt.
 
 Le pipeline canonique est :
 

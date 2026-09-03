@@ -25,12 +25,12 @@ def test_ambient_learning_accumulates_only_non_voice():
     assert learned == 2048
 
 
-def test_general_voice_low_snr_high_vad():
-    assert decide("general_voice", .90, 1).speech_confirmed
+def test_voice_any_source_low_snr_high_vad():
+    assert decide("voice_any_source", .90, 1).speech_confirmed
 
 
-def test_general_voice_normal_conversation():
-    assert decide("general_voice", .72, 4).speech_confirmed
+def test_voice_any_source_normal_conversation():
+    assert decide("voice_any_source", .72, 4).speech_confirmed
 
 
 def test_radio_room_alias_does_not_veto_voice():
@@ -72,15 +72,15 @@ def test_vad_probability_has_fast_attack_and_slow_release(monkeypatch):
 
 
 def test_reject_reason_vad_low():
-    assert decide("general_voice", .2, 10).reject_reason == "vad_too_low"
+    assert decide("voice_any_source", .2, 10).reject_reason == "vad_too_low"
 
 
 def test_low_snr_is_diagnostic_not_a_voice_veto():
-    assert decide("general_voice", .72, 1).speech_confirmed
+    assert decide("voice_any_source", .72, 1).speech_confirmed
 
 
 def test_profile_switch_does_not_change_voice_authorization():
-    assert decide("general_voice", .72, 4).speech_confirmed
+    assert decide("voice_any_source", .72, 4).speech_confirmed
     assert decide("radio_room", .72, 4).speech_confirmed
 
 
