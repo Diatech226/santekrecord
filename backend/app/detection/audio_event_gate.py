@@ -1,16 +1,17 @@
 """Level-only gate for significant audio events relative to ambient sound."""
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class AudioEventDecision:
     event_active: bool
     level_dbfs: float
-    ambient_dbfs: float
-    delta_db: float
-    event_start_threshold: float
-    event_continue_threshold: float
-    event_end_threshold: float
+    ambient_dbfs: Optional[float]
+    delta_db: Optional[float]
+    event_start_threshold: Optional[float]
+    event_continue_threshold: Optional[float]
+    event_end_threshold: Optional[float]
 
 
 class AudioEventGate:

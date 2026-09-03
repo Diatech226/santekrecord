@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppSettings, DetectionMode } from '../types';
+import { AppSettings } from '../types';
 import { Sliders, Scissors } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 
@@ -53,49 +53,7 @@ export const SettingsPanel: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <label htmlFor="detection-mode-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">
-            {t.triggerMode}
-          </label>
-          <select
-            id="detection-mode-select"
-            disabled={disabled}
-            value={settings.trigger_mode}
-            onChange={(e) => onUpdateSettings({ trigger_mode: e.target.value as DetectionMode })}
-            className="w-full text-xs bg-[#151619] border border-[#2A2B2F] text-[#E0E0E0] rounded p-2 focus:outline-none focus:border-[#00F0FF] cursor-pointer disabled:opacity-50"
-          >
-            <option value="db_vad">{t.modeDbVad}</option>
-            <option value="db_only">{t.modeDbOnly}</option>
-            <option value="vad_only">{t.modeVadOnly}</option>
-          </select>
-        </div>
-
-        {/* Threshold Slider */}
-        {(settings.trigger_mode === 'db_vad' || settings.trigger_mode === 'db_only') && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#A0A0A0] uppercase tracking-wider">{t.dbThreshold}</span>
-              <span className="text-[#00F0FF] font-mono font-bold">{settings.threshold_dbfs} dBFS</span>
-            </div>
-            <input
-              id="threshold-slider"
-              type="range"
-              min="-60"
-              max="-15"
-              step="1"
-              disabled={disabled}
-              value={settings.threshold_dbfs}
-              onChange={(e) => onUpdateSettings({ threshold_dbfs: Number(e.target.value) })}
-              className="w-full accent-[#00F0FF] h-1.5 bg-[#1A1B1F] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
-            />
-            <div className="flex justify-between text-[9px] text-[#606060] font-mono">
-              <span>{t.sensitive}</span>
-              <span>{t.loud}</span>
-            </div>
-          </div>
-        )}
-
-        {(settings.trigger_mode === 'db_vad' || settings.trigger_mode === 'vad_only') && (
+        {
           <details className="text-[10px] border border-[#202226] rounded p-2">
             <summary className="cursor-pointer text-[#00F0FF] uppercase">Advanced VAD thresholds</summary>
             <div className="grid grid-cols-2 gap-2 mt-2">
@@ -112,7 +70,7 @@ export const SettingsPanel: React.FC<Props> = ({
               </label>)}
             </div>
           </details>
-        )}
+        }
 
         {/* Pre-record & Stop after silence Grid */}
         <div className="grid grid-cols-2 gap-3">

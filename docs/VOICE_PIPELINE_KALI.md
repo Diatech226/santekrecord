@@ -14,16 +14,22 @@ The event gate means only a significant energy departure from raw ambient. It
 has no veto: `EVENT OFF / VOICE ON / REC ON` is valid for quiet speech. Speech
 origin is diagnostic metadata only. Archived WAV chunks always remain raw.
 
-The product defaults are `voice_any_source`, 3.0 seconds of verified quiet
-audio for ambient learning, and 1.5 seconds of pre-roll. Compatibility aliases
-(`general_voice`, `radio_room`) and deprecated cold-start telemetry remain for
-older clients, but neither can change recording authorization. `EVENT` cannot
-veto confirmed voice.
+The version-2 product defaults are `voice_any_source`, 16 kHz, 3.0 seconds of
+verified quiet audio, VAD learning maximum 0.15, 8 dB event margin, VAD
+start/continue 0.65/0.35, minimum speech 160/300 ms, minimum SNR 6 dB, gain
+1.0 without AGC, automatic channel selection, and 1.5 seconds of pre-roll.
+There is no legacy configuration migration. A future schema is rejected without
+rewriting it.
+
+RAW AMBIENT is explicitly `LEARNING` until a stable eight-frame quiet bootstrap
+window has passed. Voice candidates clear that window, including gradual VAD
+ramp-up. Event telemetry remains idle and its baseline/delta remain unavailable
+until then. This affects diagnostics only: confirmed voice still records.
 
 ## Repeatable manual check
 
 Open **Voice Pipeline / Diagnostics** while monitoring. For every run record:
-`RAW LEVEL`, `RAW AMBIENT`, `EVENT DELTA`, `EVENT ACTIVE`, `PROCESSED LEVEL`,
+`RAW LEVEL`, `RAW PEAK`, `RAW AMBIENT READY`, `RAW AMBIENT`, `EVENT DELTA`, `EVENT ACTIVE`, `PROCESSED LEVEL`,
 `GAIN`, `VAD RAW`, `VAD SMOOTHED`, `SPEECH CANDIDATE`, `SPEECH CONFIRMED`, and
 `REC`. Also note the selected channel, both channel RMS levels, and reject reason.
 

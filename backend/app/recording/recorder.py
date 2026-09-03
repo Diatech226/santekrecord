@@ -72,7 +72,7 @@ class AudioRecorderEngine:
                       vad_backend="unknown", return_to_ambient=None):
         chunk = np.asarray(chunk, dtype=np.float32)
         if speech_confirmed is None:
-            speech_confirmed = speech_prob >= self.config.vad_threshold
+            speech_confirmed = False
         if return_to_ambient is None:
             return_to_ambient = not speech_confirmed and speech_prob <= self.config.vad_stop_threshold
         self._push_prebuffer(chunk)
@@ -168,7 +168,7 @@ class AudioRecorderEngine:
             with wave.open(wav_path, "wb") as wf:
                 wf.setparams((1, 2, self.sample_rate, 0, "NONE", "not compressed")); wf.writeframes(pcm.tobytes())
         def avg(key):
-            values = [float(m[key]) for m in self.metrics if key in m]
+            values = [float(m[key]) for m in self.metrics if m.get(key) is not None]
             return round(sum(values) / len(values), 2) if values else None
         transmissions = [t.as_dict(self.sample_rate, trim_offset) for t in session.transmissions]
         gaps = [round(transmissions[i]["start_sec"] - transmissions[i-1]["end_sec"], 3)
@@ -178,8 +178,9 @@ class AudioRecorderEngine:
             source=self.config.source, device=self.config.device_name or "Audio Device",
             sample_rate=self.sample_rate, channels=1, timestamp_start=session.start_iso,
             timestamp_end=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            duration_seconds=round(len(result.samples)/self.sample_rate, 3), trigger_mode=self.config.trigger_mode,
-            trigger_threshold_dbfs=self.config.threshold_dbfs, vad_threshold=self.config.vad_threshold,
+            duration_seconds=round(len(result.samples)/self.sample_rate, 3), trigger_mode="confirmed_voice",
+            trigger_threshold_dbfs=avg("dynamic_threshold_dbfs"),
+            vad_threshold=self.config.vad_start_threshold,
             frequency_hz=self.config.frequency_hz if self.config.source == "gnuradio" else None,
             modulation=self.config.modulation if self.config.source == "gnuradio" else None,
             station_id=self.config.station_id if self.config.source == "gnuradio" else None,

@@ -52,9 +52,8 @@ class DetectionProfile:
 
 
 VOICE_ANY_SOURCE = DetectionProfile("voice_any_source", .80, False)
-RADIO_ROOM = DetectionProfile("radio_room", .80, True)  # compatibility/metadata alias
-GENERAL_VOICE = DetectionProfile("general_voice", .80, False)  # compatibility alias
-PROFILES = {profile.name: profile for profile in (VOICE_ANY_SOURCE, RADIO_ROOM, GENERAL_VOICE)}
+RADIO_ROOM = DetectionProfile("radio_room", .80, True)
+PROFILES = {profile.name: profile for profile in (VOICE_ANY_SOURCE, RADIO_ROOM)}
 
 
 class SpeechDetector:
@@ -62,9 +61,8 @@ class SpeechDetector:
                  minimum_snr_db=6.0, minimum_speech_ms=160, frame_ms=64,
                  profile="voice_any_source"):
         self.profile = PROFILES.get(profile, VOICE_ANY_SOURCE)
-        # General voice has intentionally conversation-friendly defaults, but an
-        # explicitly more permissive configured value is still respected.
-        if self.profile in (GENERAL_VOICE, VOICE_ANY_SOURCE, RADIO_ROOM):
+        # Both current profiles use conversation-friendly effective limits.
+        if self.profile in (VOICE_ANY_SOURCE, RADIO_ROOM):
             vad_start_threshold = min(vad_start_threshold, .50)
             vad_continue_threshold = min(vad_continue_threshold, .30)
             minimum_snr_db = min(minimum_snr_db, 3.0)

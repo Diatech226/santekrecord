@@ -13,9 +13,11 @@ class RecordingMetadata(BaseModel):
     timestamp_start: str = Field(..., description="ISO 8601 recording start time")
     timestamp_end: str = Field(..., description="ISO 8601 recording end time")
     duration_seconds: float = Field(default=0.0, description="Total recording duration in seconds")
-    trigger_mode: str = Field(default="db_vad", description="Trigger mode (db_vad, db_only, vad_only)")
-    trigger_threshold_dbfs: float = Field(default=-38.0, description="Configured RMS trigger threshold")
-    vad_threshold: float = Field(default=0.60, description="Configured VAD speech confidence threshold")
+    # Export metadata names are retained for existing recording readers. They
+    # are snapshots, not live controls: recording is authorized by confirmed voice.
+    trigger_mode: str = Field(default="confirmed_voice", description="Recording authorization recorded in this file")
+    trigger_threshold_dbfs: Optional[float] = Field(default=None, description="Diagnostic event threshold snapshot")
+    vad_threshold: float = Field(default=0.65, description="VAD start threshold snapshot")
     annotation_status: str = Field(default="pending", description="Annotation / transcription status")
     upload_status: str = Field(default="pending", description="Sync status")
     

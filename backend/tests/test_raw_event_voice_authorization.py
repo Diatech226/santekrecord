@@ -45,7 +45,7 @@ def test_event_gate_uses_raw_level_not_agc_processed_level(tmp_path):
     raw = np.full(FRAME, 10 ** (-43 / 20), np.float32)
     _archive, processed = engine._prepare_detection_chunk(raw)
     processed_dbfs = engine.rms_detector.process_chunk(processed)[1]
-    event = engine.event_gate.process(engine.raw_level_dbfs, engine._raw_ambient_baseline(-43))
+    event = engine.event_gate.process(engine.raw_level_dbfs, engine._raw_ambient_baseline())
     assert event.event_active
     assert engine.raw_level_dbfs != round(processed_dbfs, 1)
 
@@ -55,7 +55,7 @@ def test_raw_archive_processed_vad_and_raw_gate_are_separate(tmp_path):
     raw_input = np.full(FRAME, .01, np.float32)
     archive, detection = engine._prepare_detection_chunk(raw_input)
     engine._raw_ambient_levels.extend([-60.0] * 20)
-    event = engine.event_gate.process(engine.raw_level_dbfs, engine._raw_ambient_baseline(-40))
+    event = engine.event_gate.process(engine.raw_level_dbfs, engine._raw_ambient_baseline())
     recorder = AudioRecorderEngine(AppConfig(), str(tmp_path / "recordings"))
     recorder.process_frame(archive, engine.raw_level_dbfs, .9,
                            speech_confirmed=True, event_active=event.event_active)
@@ -76,7 +76,7 @@ def test_calibration_result_changes_event_gate_margin_or_threshold(tmp_path):
 
 
 def test_effective_confirmation_is_exact_confirmed_voice_alias(tmp_path):
-    engine = MainAudioEngine(AppConfig(cold_start_vad_threshold=.99), str(tmp_path))
+    engine = MainAudioEngine(AppConfig(), str(tmp_path))
     decision = SimpleNamespace(speech_confirmed=True, is_candidate=True)
     assert engine._effective_confirmation(decision, .5)
     assert engine.effective_speech_confirmed

@@ -33,9 +33,6 @@ export default function App() {
     device_id: null,
     audio_backend: 'auto',
     sample_rate: 16000,
-    trigger_mode: 'db_vad',
-    threshold_dbfs: -38,
-    vad_threshold: 0.6,
     preroll_seconds: 1.5,
     silence_seconds: 2.0,
     input_gain: 1.0,
@@ -46,7 +43,6 @@ export default function App() {
     adaptive_threshold: true,
     ambient_learning_seconds: 3,
     ambient_learning_vad_max: .15,
-    cold_start_vad_threshold: .75,
     ambient_window_seconds: 20,
     noise_margin_db: 8,
     minimum_snr_db: 6,
@@ -759,9 +755,9 @@ export default function App() {
               {/* Hardware LED Meter */}
               <AudioMeter
                 levelDbfs={levelDbfs}
-                thresholdDbfs={settings.threshold_dbfs}
+                thresholdDbfs={telemetry?.event_start_threshold_dbfs ?? -38}
                 speechProb={speechProb}
-                vadThreshold={settings.vad_threshold}
+                vadThreshold={settings.vad_start_threshold ?? .65}
                 voiceDetected={voiceDetected}
                 isMonitoring={isMonitoring}
                 ambientNoiseDbfs={ambientNoiseDbfs}
@@ -792,7 +788,7 @@ export default function App() {
                     ['Current / RMS', `${levelDbfs.toFixed(1)} dBFS`],
                     ['Peak', `${peakDbfs.toFixed(1)} dBFS`],
                     ['Noise floor', `${ambientNoiseDbfs.toFixed(1)} dBFS`],
-                    ['Dynamic threshold', `${(telemetry?.dynamic_threshold_dbfs ?? settings.threshold_dbfs).toFixed(1)} dBFS`],
+                    ['Dynamic threshold', `${(telemetry?.dynamic_threshold_dbfs ?? -90).toFixed(1)} dBFS`],
                     ['SNR', `${(telemetry?.snr_db ?? 0).toFixed(1)} dB`],
                     ['Speech band', `${(telemetry?.speech_band_snr_db ?? 0).toFixed(1)} dB`],
                     ['Speech', speechProb.toFixed(2)],
@@ -821,7 +817,8 @@ export default function App() {
                     <span>Selected channel</span><span className="text-[#D0D0D0] uppercase">{settings.input_channel === 'auto' ? `AUTO → CH${(telemetry?.selected_channel_index ?? 0) + 1}` : telemetry?.selected_channel?.replace('_', ' ') ?? settings.input_channel}</span>
                     <span>CH1 / CH2 RMS</span><span className="text-[#D0D0D0]">{telemetry?.channel_1_rms_dbfs?.toFixed(1) ?? '—'} / {telemetry?.channel_2_rms_dbfs?.toFixed(1) ?? '—'} dBFS</span>
                     <span>Raw / processed level</span><span className="text-[#D0D0D0]">{telemetry?.raw_level_dbfs?.toFixed(1) ?? '—'} / {telemetry?.processed_level_dbfs?.toFixed(1) ?? '—'} dBFS</span>
-                    <span>Raw ambient / event delta</span><span className="text-[#D0D0D0]">{telemetry?.raw_noise_floor_dbfs?.toFixed(1) ?? '—'} dBFS / +{telemetry?.event_delta_db?.toFixed(1) ?? '—'} dB</span>
+                    <span>Raw ambient ready</span><span className="text-[#D0D0D0]">{telemetry?.raw_ambient_ready ? 'YES' : 'LEARNING'}</span>
+                    <span>Raw ambient / event delta</span><span className="text-[#D0D0D0]">{telemetry?.raw_ambient_ready ? `${telemetry.raw_noise_floor_dbfs?.toFixed(1)} dBFS / +${telemetry.event_delta_db?.toFixed(1)} dB` : 'LEARNING / —'}</span>
                     <span>Event active</span><span className="text-[#D0D0D0]">{telemetry?.event_active ? 'YES' : 'NO'}</span>
                     <span>Detection gain</span><span className="text-[#D0D0D0]">{telemetry?.effective_gain?.toFixed(2) ?? '—'}×</span>
                     <span>Device</span><span className="text-[#D0D0D0]">{telemetry?.device_name ?? settings.device_name ?? 'Default input'}</span>
@@ -929,7 +926,7 @@ export default function App() {
                           {isMonitoring ? speechProb.toFixed(2) : '--'}
                         </div>
                         <div className="text-[9px] font-mono text-[#50525A]">
-                          / {settings.vad_threshold.toFixed(2)}
+                          / {(settings.vad_start_threshold ?? .65).toFixed(2)}
                         </div>
                       </div>
                       <div className="w-full bg-[#141518] h-1.5 rounded-full overflow-hidden border border-[#202228]">
