@@ -5,8 +5,15 @@ import { useLanguage } from '../i18n/LanguageContext';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onRunCalibration: () => Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number }>;
-  onApplyThreshold: (recommendedThreshold: number) => void;
+  onRunCalibration: () => Promise<CalibrationResult>;
+  onApplyThreshold: (recommendedMargin: number) => void;
+}
+
+interface CalibrationResult {
+  noise_floor_dbfs: number;
+  recommended_threshold_dbfs: number;
+  margin_db: number;
+  quiet_seconds: number;
 }
 
 export const CalibrationModal: React.FC<Props> = ({
@@ -17,13 +24,11 @@ export const CalibrationModal: React.FC<Props> = ({
 }) => {
   const { t } = useLanguage();
   const [stage, setStage] = useState<'idle' | 'running' | 'done'>('idle');
-  const [countdown, setCountdown] = useState(5);
-  const [result, setResult] = useState<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number } | null>(null);
+  const [result, setResult] = useState<CalibrationResult | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setStage('idle');
-      setCountdown(5);
       setResult(null);
     }
   }, [isOpen]);
@@ -32,26 +37,18 @@ export const CalibrationModal: React.FC<Props> = ({
 
   const handleStart = async () => {
     setStage('running');
-    setCountdown(5);
-
-    const timer = setInterval(() => {
-      setCountdown((prev) => Math.max(0, prev - 1));
-    }, 1000);
-
     try {
       const res = await onRunCalibration();
       setResult(res);
       setStage('done');
     } catch {
       setStage('idle');
-    } finally {
-      clearInterval(timer);
     }
   };
 
   const handleApply = () => {
     if (result) {
-      onApplyThreshold(result.recommended_threshold_dbfs);
+      onApplyThreshold(result.margin_db);
       onClose();
     }
   };
@@ -101,8 +98,10 @@ export const CalibrationModal: React.FC<Props> = ({
           <div className="space-y-4 py-4 text-center">
             <Activity className="w-8 h-8 text-[#00F0FF] animate-pulse mx-auto shadow-[0_0_10px_#00F0FF]" />
             <div className="text-xs text-[#A0A0A0] uppercase tracking-wider">{t.calibMeasuring}</div>
-            <div className="text-3xl font-mono font-bold text-[#00F0FF]">{countdown}s</div>
-            <div className="text-[10px] text-[#606060] uppercase">{t.calibQuiet}</div>
+            <div className="text-3xl font-mono font-bold text-[#00F0FF]">QUIET CAPTURE</div>
+            <div className="text-[10px] text-[#606060] uppercase">
+              Collecting 3.0 s of verified quiet audio. Voice or noise pauses capture, so this may take longer.
+            </div>
           </div>
         )}
 
@@ -118,6 +117,10 @@ export const CalibrationModal: React.FC<Props> = ({
                 <span className="text-[#00F0FF] font-mono font-bold text-sm">
                   {result.recommended_threshold_dbfs} dBFS
                 </span>
+              </div>
+              <div className="flex justify-between border-t border-[#1A1B1F] pt-2.5 items-center">
+                <span className="text-[#A0A0A0] uppercase text-[10px]">Event gate margin</span>
+                <span className="text-[#00F0FF] font-mono font-bold text-sm">+{result.margin_db} dB</span>
               </div>
             </div>
 

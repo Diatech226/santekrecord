@@ -141,6 +141,8 @@ export interface MonitorUpdate {
   peak_dbfs?: number;
   rms_dbfs?: number;
   noise_floor_dbfs?: number;
+  raw_noise_floor_dbfs?: number;
+  event_delta_db?: number;
   threshold_dbfs?: number;
   dynamic_threshold_dbfs?: number;
   event_active?: boolean;

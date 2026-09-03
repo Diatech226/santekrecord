@@ -272,8 +272,9 @@ export default function App() {
     return result;
   };
 
-  const applyCalibrationThreshold = (recommended: number) => {
-    handleUpdateSettings({ threshold_dbfs: recommended });
+  const applyCalibrationThreshold = (recommendedMargin: number) => {
+    // Calibration and the event gate now share the raw-level domain.
+    handleUpdateSettings({ noise_margin_db: recommendedMargin });
   };
 
   const testInput = async () => {
@@ -817,6 +818,8 @@ export default function App() {
                     <span>Selected channel</span><span className="text-[#D0D0D0] uppercase">{settings.input_channel === 'auto' ? `AUTO → CH${(telemetry?.selected_channel_index ?? 0) + 1}` : telemetry?.selected_channel?.replace('_', ' ') ?? settings.input_channel}</span>
                     <span>CH1 / CH2 RMS</span><span className="text-[#D0D0D0]">{telemetry?.channel_1_rms_dbfs?.toFixed(1) ?? '—'} / {telemetry?.channel_2_rms_dbfs?.toFixed(1) ?? '—'} dBFS</span>
                     <span>Raw / processed level</span><span className="text-[#D0D0D0]">{telemetry?.raw_level_dbfs?.toFixed(1) ?? '—'} / {telemetry?.processed_level_dbfs?.toFixed(1) ?? '—'} dBFS</span>
+                    <span>Raw ambient / event delta</span><span className="text-[#D0D0D0]">{telemetry?.raw_noise_floor_dbfs?.toFixed(1) ?? '—'} dBFS / +{telemetry?.event_delta_db?.toFixed(1) ?? '—'} dB</span>
+                    <span>Event active</span><span className="text-[#D0D0D0]">{telemetry?.event_active ? 'YES' : 'NO'}</span>
                     <span>Detection gain</span><span className="text-[#D0D0D0]">{telemetry?.effective_gain?.toFixed(2) ?? '—'}×</span>
                     <span>Device</span><span className="text-[#D0D0D0]">{telemetry?.device_name ?? settings.device_name ?? 'Default input'}</span>
                     <span>Backend state</span><span className="text-[#D0D0D0]">{telemetry?.device_connected ? 'Connected' : 'No audio input'}</span>
@@ -826,9 +829,8 @@ export default function App() {
                     <span>Frames received</span><span className="text-[#D0D0D0]">{telemetry?.frames_received?.toLocaleString() ?? 0}</span>
                     <span>Last audio frame</span><span className="text-[#D0D0D0]">{telemetry?.last_audio_frame_ms == null ? 'Never' : `${telemetry.last_audio_frame_ms} ms ago`}</span>
                     <span>VAD Engine</span><span className="text-[#D0D0D0]">{telemetry?.vad_backend === 'silero_onnx' ? 'Silero ONNX' : telemetry?.vad_backend === 'acoustic_fallback' ? 'Acoustic fallback — ⚠ degraded detection' : telemetry?.vad_backend?.replaceAll('_', ' ') ?? 'Starting'}</span>
-                    <span>Cold-start voice protection</span><span className={telemetry?.cold_start_voice_active ? 'text-[#00FF88]' : 'text-[#777]'}>{telemetry?.cold_start_voice_active ? 'ACTIVE' : 'INACTIVE'}</span>
                     <span>VAD raw / smoothed</span><span className="text-[#D0D0D0]">{telemetry?.vad_raw_probability?.toFixed(2) ?? '—'} / {telemetry?.vad_smoothed_probability?.toFixed(2) ?? speechProb.toFixed(2)}</span>
-                    <span>Start / continue / cold</span><span className="text-[#D0D0D0]">{telemetry?.effective_vad_start_threshold ?? '—'} / {telemetry?.vad_continue_threshold ?? '—'} / {settings.cold_start_vad_threshold ?? '—'}</span>
+                    <span>VAD start / continue</span><span className="text-[#D0D0D0]">{telemetry?.effective_vad_start_threshold ?? '—'} / {telemetry?.vad_continue_threshold ?? '—'}</span>
                     <span>Speech candidate</span><span className="text-[#D0D0D0]">{telemetry?.speech_candidate ? 'YES' : 'NO'}</span>
                     <span>Speech confirmed</span><span className="text-[#D0D0D0]">{telemetry?.speech_confirmed ? 'YES' : 'NO'}</span>
                     <span>Effective speech</span><span className="text-[#D0D0D0]">{telemetry?.effective_speech_confirmed ? 'YES' : 'NO'}</span>

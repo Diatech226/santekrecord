@@ -1,6 +1,6 @@
 # Auto Voice Recorder (Linux)
 
-Application web locale minimaliste et professionnelle pour **Linux** permettant d'automatiser l'enregistrement audio selon la détection d'activité vocale (VAD) et de niveau sonore (dBFS).
+Application web locale minimaliste et professionnelle pour **Linux** permettant d'automatiser l'enregistrement audio dès que le VAD confirme une voix humaine. Le niveau sonore (dBFS) informe et met en tampon les événements, sans autoriser ni interdire l'enregistrement.
 
 ---
 
@@ -13,13 +13,13 @@ Application web locale minimaliste et professionnelle pour **Linux** permettant 
 - **Moteur de Détection Intelligent** :
   - **RMS / dBFS** : calcul en temps réel du niveau sonore (`20 * log10(RMS)`).
   - **Silero VAD** : probabilité de présence de voix humaine (0.00 à 1.00) avec modèle PyTorch et fallback acoustique formant.
-  - **Mode combiné dB + VAD** : déclenchement précis évitant les faux positifs (filtre de lissage 2 blocs positifs parmi 3).
+  - **Chemins séparés** : `RAW LEVEL -> EVENT GATE` pour la télémétrie, et `GAIN/AGC -> SILERO -> SPEECH -> REC` pour la décision. Le gate n'a aucun droit de veto sur une voix confirmée.
 - **Enregistrement Automatisé** :
   - **Pre-buffer circulaire** : conserve 1 seconde (configurable de 0 à 5s) avant la détection pour ne jamais couper le début de phrase.
   - **Arrêt sur silence** : temporisation configurable (0.5s à 10s, défaut 2.0s) après la disparition de la voix.
   - **Format standard** : WAV PCM16 16000 Hz mono + fichier JSON de métadonnées complet.
 - **Calibration Automatique du Bruit de Fond** :
-  - Mesure le niveau ambiant pendant 5 secondes et recommande le seuil optimal (`noise_floor + marge`).
+  - Accumule 3 secondes d'audio calme vérifié (la voix suspend la mesure) et applique la marge recommandée au gate RAW.
 - **Interface Minimaliste & Technique** :
   - Dark mode sobre, bargraph LED segmenté avec repère de seuil, badge d'état temps réel, lecteur audio intégré avec scrubbing, historique des enregistrements et visionneuse de métadonnées.
 
@@ -274,7 +274,7 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 - `PUT /api/settings` : Sauvegarde la configuration dans `config.json`
 - `POST /api/monitor/start` : Démarre la surveillance audio continue
 - `POST /api/monitor/stop` : Arrête la surveillance
-- `POST /api/calibrate` : Déclenche la calibration du bruit ambiant (5 sec)
+- `POST /api/calibrate` : accumule 3 secondes de bruit ambiant vérifié et recommande la marge du gate RAW
 - `GET /api/recordings` : Liste des enregistrements triés du plus récent au plus ancien
 - `GET /api/recordings/{id}` : Métadonnées d'un enregistrement
 - `GET /api/recordings/{id}/audio` : Fichier audio WAV streamable

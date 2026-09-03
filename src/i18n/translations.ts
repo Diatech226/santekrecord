@@ -563,7 +563,7 @@ export const translations: Record<Language, Translations> = {
     boostApplied: 'Boost',
 
     calibTitle: 'Noise Floor Calibration',
-    calibDesc: 'Automated calibration measures ambient noise floor across 5 seconds and calculates the optimal trigger threshold with high SNR margin.',
+    calibDesc: 'Automated calibration collects 3 seconds of verified quiet audio and calculates the raw event-gate margin. Voice or noise pauses capture.',
     calibInstructionsTitle: 'Instructions:',
     calibStep1: '1. Remain silent in normal operating acoustics.',
     calibStep2: '2. Keep constant fans/SDR/hardware running.',
@@ -862,7 +862,7 @@ export const translations: Record<Language, Translations> = {
     boostApplied: 'Gain',
 
     calibTitle: 'Étalonnage du Bruit de Fond',
-    calibDesc: 'L\'étalonnage automatisé mesure le bruit ambiant pendant 5 secondes et calcule le seuil de déclenchement optimal.',
+    calibDesc: 'L\'étalonnage collecte 3 secondes de calme vérifié et calcule la marge du gate RAW. La voix ou le bruit suspend la capture.',
     calibInstructionsTitle: 'Instructions :',
     calibStep1: '1. Restez silencieux dans l\'acoustique normale.',
     calibStep2: '2. Laissez tourner les ventilateurs/SDR/appareils.',
