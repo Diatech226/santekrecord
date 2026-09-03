@@ -32,6 +32,7 @@ class SileroVADDetector:
         self.vad_error = None
         self._pending = np.empty(0, dtype=np.float32)
         self._recent = deque(maxlen=3)
+        self._smoothed_probability = 0.0
         self._init_model()
 
     def _init_model(self):
@@ -73,13 +74,21 @@ class SileroVADDetector:
             frame, self._pending = self._pending[:self.frame_samples], self._pending[self.frame_samples:]
             probabilities.append(self._infer_frame(frame))
         if probabilities:
-            self._recent.append(max(probabilities))
-        return float(np.mean(self._recent)) if self._recent else 0.0
+            current = max(probabilities)
+            self._recent.append(current)
+            # Fast attack preserves the first voiced frame. Slow release avoids
+            # chatter on short dips without averaging speech with old silence.
+            if current >= self._smoothed_probability:
+                self._smoothed_probability = current
+            else:
+                self._smoothed_probability = .75 * self._smoothed_probability + .25 * current
+        return float(self._smoothed_probability)
 
     def reset(self):
         """Clear all streaming/recurrent state between monitoring sessions."""
         self._pending = np.empty(0, dtype=np.float32)
         self._recent.clear()
+        self._smoothed_probability = 0.0
         self._onnx_state = np.zeros((2, 1, 128), dtype=np.float32)
         if self.model is not None:
             reset_states = getattr(self.model, "reset_states", None)

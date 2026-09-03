@@ -80,6 +80,13 @@ def audio_diagnostics(engine=Depends(get_engine)):
         "level_dbfs": telemetry.get("level_dbfs"),
         "peak_dbfs": telemetry.get("peak_dbfs"),
         "alsa_device": telemetry.get("alsa_device"),
+        "vad_backend": telemetry.get("vad_backend"),
+        "vad_model_loaded": telemetry.get("vad_model_loaded"),
+        "vad_error": telemetry.get("vad_error"),
+        "cold_start_voice_active": telemetry.get("cold_start_voice_active"),
+        "cold_start_vad_threshold": telemetry.get("cold_start_vad_threshold"),
+        "effective_speech_confirmed": telemetry.get("effective_speech_confirmed"),
+        "ambient_learning_paused_for_voice": telemetry.get("ambient_learning_paused_for_voice"),
         "error": engine.current_error,
     }
 
