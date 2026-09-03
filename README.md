@@ -410,3 +410,15 @@ Select `radio_room`, reset the ambient profile, start monitoring, then
 immediately activate the talkie and speak. Expected: `radio_activity = true`,
 `speech_confirmed = true`, and `COMMUNICATION ACTIVE`. Stop talking and wait;
 the communication must close and ambient profile learning must resume and save.
+
+## TEST 4 — COLD-START VOICE CONTINUITY
+
+Reset the ambient profile, start monitoring, and speak the first word strongly:
+“Bonjour…”. Continue more softly: “… ceci est un test de conversation”. Expected:
+one continuous communication, with no interruption when VAD falls below `0.75`;
+normal detector hysteresis and natural silence still control continuation and end.
+
+Repeat with the `radio_room` profile: reset the ambient profile, start monitoring,
+open the talkie, speak the first word strongly, then continue normally or more
+softly. Expected: one radio transmission; speech and radio activity may remain
+true after VAD falls below `0.75`.

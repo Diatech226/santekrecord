@@ -80,6 +80,9 @@ class MainAudioEngine:
         self.ambient_learned_samples = 0
         self.current_speech_candidate = False
         self.current_speech_reject_reason = "vad_too_low"
+        self.cold_start_mode_active = False
+        self.cold_start_voice_triggered = False
+        # Kept as a compatibility alias for older diagnostics consumers.
         self.cold_start_voice_active = False
         self.effective_speech_confirmed = False
         self.ambient_learning_paused_for_voice = False
@@ -140,21 +143,38 @@ class MainAudioEngine:
         )
 
     def _effective_confirmation(self, decision, speech_probability: float) -> bool:
-        """Protect high-confidence voice while initial room learning is active."""
-        cold_start_voice = bool(
-            self.ambient_learning
+        """Use the cold-start threshold only to arm the first recording."""
+        self.cold_start_mode_active = bool(
+            self.ambient_learning and not self.ambient_profile_loaded
+        )
+        cold_start_trigger = bool(
+            self.cold_start_mode_active
+            and not self.recorder.is_recording
             and decision.speech_confirmed
             and speech_probability >= self.config.cold_start_vad_threshold
         )
-        effective = bool(
-            decision.speech_confirmed if not self.ambient_learning else cold_start_voice
-        )
-        self.cold_start_voice_active = self.ambient_learning
+        if not self.cold_start_mode_active or self.recorder.is_recording:
+            effective = bool(decision.speech_confirmed)
+        else:
+            effective = cold_start_trigger
+        if cold_start_trigger:
+            self.cold_start_voice_triggered = True
+        self.cold_start_voice_active = self.cold_start_mode_active
         self.effective_speech_confirmed = effective
         self.ambient_learning_paused_for_voice = bool(
-            self.ambient_learning and (effective or self.recorder.is_recording)
+            self.ambient_learning and (
+                effective or self.recorder.is_recording
+                or decision.is_candidate or decision.radio_activity
+            )
         )
         return effective
+
+    def _reset_cold_start_state(self) -> None:
+        self.cold_start_mode_active = False
+        self.cold_start_voice_triggered = False
+        self.cold_start_voice_active = False
+        self.effective_speech_confirmed = False
+        self.ambient_learning_paused_for_voice = False
 
     def unsubscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback in self._listeners:
@@ -218,6 +238,7 @@ class MainAudioEngine:
         if self._is_running:
             return True
 
+        self._reset_cold_start_state()
         self.current_error = None
         try:
             self.source = self._create_source()
@@ -269,6 +290,10 @@ class MainAudioEngine:
         self._ambient_profile_dirty = False
         self._ambient_profile_saved = self.ambient_profile_loaded
         self.ambient_learning = self.config.adaptive_noise and not self.ambient_profile_loaded
+        self.cold_start_mode_active = bool(
+            self.ambient_learning and not self.ambient_profile_loaded
+        )
+        self.cold_start_voice_active = self.cold_start_mode_active
         self.current_status = "learning_ambient" if self.ambient_learning else "listening"
         self._thread = threading.Thread(target=self._audio_loop, daemon=True)
         self._thread.start()
@@ -297,6 +322,7 @@ class MainAudioEngine:
         self.current_level_dbfs = -90.0
         self.current_speech_prob = 0.0
         self.current_voice_detected = False
+        self._reset_cold_start_state()
 
         self._broadcast(self.get_telemetry())
         print("[MainAudioEngine] Audio engine stopped.")
@@ -324,6 +350,9 @@ class MainAudioEngine:
         self._ambient_profile_saved = False
         self.ambient_learned_samples = 0
         self.ambient_learning = bool(self.config.adaptive_noise)
+        self._reset_cold_start_state()
+        self.cold_start_mode_active = bool(self.ambient_learning)
+        self.cold_start_voice_active = self.cold_start_mode_active
         if self._is_running:
             self.current_status = "learning_ambient" if self.ambient_learning else "listening"
         return deleted
@@ -400,7 +429,9 @@ class MainAudioEngine:
                     noise_metrics.spectral_difference,
                 )
                 effective_speech_confirmed = self._effective_confirmation(decision, speech_prob)
-                cold_start_voice = bool(self.ambient_learning and effective_speech_confirmed)
+                cold_start_voice = bool(
+                    self.cold_start_mode_active and self.cold_start_voice_triggered
+                )
                 learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
                 if self.ambient_learning:
                     # Calibration is measured in verified quiet audio, not wall time.
@@ -465,7 +496,10 @@ class MainAudioEngine:
                                        not decision.radio_activity),
                 )
                 self.ambient_learning_paused_for_voice = bool(
-                    self.ambient_learning and (effective_speech_confirmed or is_recording)
+                    self.ambient_learning and (
+                        effective_speech_confirmed or is_recording
+                        or decision.is_candidate or decision.radio_activity
+                    )
                 )
                 self.current_status = (("calibration_paused_recording_voice"
                     if self.ambient_learning_paused_for_voice else
@@ -520,6 +554,8 @@ class MainAudioEngine:
             "ambient_learned_seconds": round(self.ambient_learned_samples / self.config.sample_rate, 3),
             "ambient_learning_vad_max": self.config.ambient_learning_vad_max,
             "cold_start_voice_active": self.cold_start_voice_active,
+            "cold_start_mode_active": self.cold_start_mode_active,
+            "cold_start_voice_triggered": self.cold_start_voice_triggered,
             "cold_start_vad_threshold": self.config.cold_start_vad_threshold,
             "effective_speech_confirmed": self.effective_speech_confirmed,
             "ambient_learning_paused_for_voice": self.ambient_learning_paused_for_voice,
