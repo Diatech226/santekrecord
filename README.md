@@ -370,3 +370,43 @@ Manual microphone validation:
 4. Repeat but speak immediately after Start. Calibration must display
    **CALIBRATION PAUSED - VOICE PRESENT**, must not advance learned ambient time,
    and must resume automatically when the room is quiet.
+# Kali validation checklist
+
+Silero is pinned to official release `v6.2.1`. The installer validates the
+model by loading it with ONNX Runtime, checking the `input`, `state`, and `sr`
+inputs, and running a 512-sample dummy inference before atomically installing
+it. A SHA-256 is deliberately not pinned because the release asset was not
+reachable from the environment used to establish a trustworthy digest.
+
+## TEST 1 — SILERO
+
+```bash
+./start_kali.sh
+```
+
+Expected startup output:
+
+```text
+[OK] onnxruntime 1.x.x
+[OK] Silero VAD ONNX ready
+```
+
+Verify in the UI diagnostics: `vad_backend = silero_onnx` and
+`vad_model_loaded = true`. If the network is unavailable, an existing validated
+model is reused without downloading. Without a valid local model, startup logs
+explicit warnings and continues with the acoustic fallback.
+
+## TEST 2 — IMMEDIATE VOICE
+
+Delete/reset the ambient profile, start monitoring, and immediately say
+“Bonjour ceci est un test de démarrage”. Expected: VAD rises quickly,
+calibration pauses, `VOICE` / `COMMUNICATION ACTIVE` appears, and WAV recording
+starts. After speaking stops and the communication closes, ambient learning
+resumes, completes using quiet frames, and saves the profile.
+
+## TEST 3 — RADIO ROOM
+
+Select `radio_room`, reset the ambient profile, start monitoring, then
+immediately activate the talkie and speak. Expected: `radio_activity = true`,
+`speech_confirmed = true`, and `COMMUNICATION ACTIVE`. Stop talking and wait;
+the communication must close and ambient profile learning must resume and save.

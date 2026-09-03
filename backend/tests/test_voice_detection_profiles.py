@@ -57,6 +57,17 @@ def test_acoustic_fallback_status(monkeypatch, tmp_path):
     assert status["vad_model_loaded"] is False and status["vad_error"]
 
 
+def test_vad_probability_has_fast_attack_and_slow_release(monkeypatch):
+    vad = SileroVADDetector()
+    probabilities = iter((.02, .04, .91, .20))
+    monkeypatch.setattr(vad, "_infer_frame", lambda _frame: next(probabilities))
+    frame = np.zeros(vad.frame_samples, np.float32)
+    assert vad.get_speech_probability(frame) == .02
+    assert vad.get_speech_probability(frame) == .04
+    assert vad.get_speech_probability(frame) == .91
+    assert .70 < vad.get_speech_probability(frame) < .91
+
+
 def test_reject_reason_vad_low():
     assert decide("general_voice", .2, 10).reject_reason == "vad_too_low"
 

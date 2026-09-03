@@ -108,6 +108,7 @@ export interface AppSettings {
   adaptive_threshold?: boolean;
   ambient_learning_seconds?: number;
   ambient_learning_vad_max?: number;
+  cold_start_vad_threshold?: number;
   ambient_window_seconds?: number;
   noise_margin_db?: number;
   minimum_snr_db?: number;
@@ -149,6 +150,9 @@ export interface MonitorUpdate {
   vad_backend?: string;
   vad_model_loaded?: boolean;
   vad_error?: string | null;
+  cold_start_voice_active?: boolean;
+  effective_speech_confirmed?: boolean;
+  ambient_learning_paused_for_voice?: boolean;
   speech_candidate?: boolean;
   speech_reject_reason?: string;
   minimum_snr_db?: number;

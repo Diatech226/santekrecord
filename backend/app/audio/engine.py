@@ -80,6 +80,9 @@ class MainAudioEngine:
         self.ambient_learned_samples = 0
         self.current_speech_candidate = False
         self.current_speech_reject_reason = "vad_too_low"
+        self.cold_start_voice_active = False
+        self.effective_speech_confirmed = False
+        self.ambient_learning_paused_for_voice = False
 
         # Subscribers (e.g. WebSocket broadcast queues)
         self._listeners: List[Callable[[Dict[str, Any]], None]] = []
@@ -135,6 +138,23 @@ class MainAudioEngine:
             self.recorder.is_recording if recording_active is None else recording_active,
             self.config.ambient_learning_vad_max,
         )
+
+    def _effective_confirmation(self, decision, speech_probability: float) -> bool:
+        """Protect high-confidence voice while initial room learning is active."""
+        cold_start_voice = bool(
+            self.ambient_learning
+            and decision.speech_confirmed
+            and speech_probability >= self.config.cold_start_vad_threshold
+        )
+        effective = bool(
+            decision.speech_confirmed if not self.ambient_learning else cold_start_voice
+        )
+        self.cold_start_voice_active = self.ambient_learning
+        self.effective_speech_confirmed = effective
+        self.ambient_learning_paused_for_voice = bool(
+            self.ambient_learning and (effective or self.recorder.is_recording)
+        )
+        return effective
 
     def unsubscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback in self._listeners:
@@ -379,14 +399,17 @@ class MainAudioEngine:
                     noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
                     noise_metrics.spectral_difference,
                 )
+                effective_speech_confirmed = self._effective_confirmation(decision, speech_prob)
+                cold_start_voice = bool(self.ambient_learning and effective_speech_confirmed)
                 learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
                 if self.ambient_learning:
                     # Calibration is measured in verified quiet audio, not wall time.
                     # An empty profile needs quiet bootstrap frames; a restored or
                     # partially learned profile can also reject radio signatures.
-                    if ((self.noise_profile.frames_learned == 0
+                    if (not self.ambient_learning_paused_for_voice and (
+                            (self.noise_profile.frames_learned == 0
                             and speech_prob < self.config.ambient_learning_vad_max)
-                            or self.should_learn_ambient(speech_prob, decision)):
+                            or self.should_learn_ambient(speech_prob, decision))):
                         self.noise_profile.update(dbfs, detection_spectrum)
                         self.ambient_learned_samples += len(chunk)
                     # Chunk boundaries may straddle the configured duration; one
@@ -421,7 +444,7 @@ class MainAudioEngine:
                 # 3. Process recorder state machine
                 status, voice_detected, is_recording = self.recorder.process_frame(
                     raw_chunk, self.current_level_dbfs, self.current_speech_prob,
-                    speech_confirmed=(False if self.ambient_learning else decision.speech_confirmed),
+                    speech_confirmed=effective_speech_confirmed,
                     candidate=decision.is_candidate, radio_activity=decision.radio_activity,
                     confidence=decision.confidence,
                     metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
@@ -431,6 +454,8 @@ class MainAudioEngine:
                              "spectral_change": noise_metrics.spectral_difference,
                              "speech_probability": speech_prob,
                              "speech_confirmed": decision.speech_confirmed,
+                             "effective_speech_confirmed": effective_speech_confirmed,
+                             "cold_start_voice": cold_start_voice,
                              "radio_activity": decision.radio_activity,
                              "radio_activity_score": decision.radio_activity_score},
                     vad_backend=self.vad_detector.vad_backend,
@@ -439,8 +464,13 @@ class MainAudioEngine:
                                        speech_prob < self.config.vad_stop_threshold and
                                        not decision.radio_activity),
                 )
-                self.current_status = (("calibration_paused_voice_present"
-                    if speech_prob >= self.config.ambient_learning_vad_max else "learning_ambient")
+                self.ambient_learning_paused_for_voice = bool(
+                    self.ambient_learning and (effective_speech_confirmed or is_recording)
+                )
+                self.current_status = (("calibration_paused_recording_voice"
+                    if self.ambient_learning_paused_for_voice else
+                    ("calibration_paused_voice_present"
+                    if speech_prob >= self.config.ambient_learning_vad_max else "learning_ambient"))
                     if self.ambient_learning else status)
                 self.current_voice_detected = voice_detected
 
@@ -489,6 +519,10 @@ class MainAudioEngine:
             "ambient_learning": self.ambient_learning,
             "ambient_learned_seconds": round(self.ambient_learned_samples / self.config.sample_rate, 3),
             "ambient_learning_vad_max": self.config.ambient_learning_vad_max,
+            "cold_start_voice_active": self.cold_start_voice_active,
+            "cold_start_vad_threshold": self.config.cold_start_vad_threshold,
+            "effective_speech_confirmed": self.effective_speech_confirmed,
+            "ambient_learning_paused_for_voice": self.ambient_learning_paused_for_voice,
             "ambient_profile_loaded": self.ambient_profile_loaded,
             "ambient_profile_age_seconds": self.ambient_profile_age_seconds,
             "ambient_profile_key": self.ambient_profile_store.key(

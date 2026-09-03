@@ -43,6 +43,7 @@ export default function App() {
     adaptive_threshold: true,
     ambient_learning_seconds: 5,
     ambient_learning_vad_max: .15,
+    cold_start_vad_threshold: .75,
     ambient_window_seconds: 20,
     noise_margin_db: 8,
     minimum_snr_db: 3,
@@ -804,7 +805,8 @@ export default function App() {
                     <span>Channels</span><span className="text-[#D0D0D0]">{telemetry?.channels ?? 1}</span>
                     <span>Frames received</span><span className="text-[#D0D0D0]">{telemetry?.frames_received?.toLocaleString() ?? 0}</span>
                     <span>Last audio frame</span><span className="text-[#D0D0D0]">{telemetry?.last_audio_frame_ms == null ? 'Never' : `${telemetry.last_audio_frame_ms} ms ago`}</span>
-                    <span>VAD backend</span><span className="text-[#D0D0D0]">{telemetry?.vad_backend === 'silero_onnx' ? 'Silero ONNX' : telemetry?.vad_backend?.replaceAll('_', ' ') ?? 'Starting'}</span>
+                    <span>VAD Engine</span><span className="text-[#D0D0D0]">{telemetry?.vad_backend === 'silero_onnx' ? 'Silero ONNX' : telemetry?.vad_backend === 'acoustic_fallback' ? 'Acoustic fallback — ⚠ degraded detection' : telemetry?.vad_backend?.replaceAll('_', ' ') ?? 'Starting'}</span>
+                    <span>Cold-start voice protection</span><span className={telemetry?.cold_start_voice_active ? 'text-[#00FF88]' : 'text-[#777]'}>{telemetry?.cold_start_voice_active ? 'ACTIVE' : 'INACTIVE'}</span>
                     <span>Speech probability</span><span className="text-[#D0D0D0]">{speechProb.toFixed(2)}</span>
                     <span>Speech candidate</span><span className="text-[#D0D0D0]">{telemetry?.speech_candidate ? 'YES' : 'NO'}</span>
                     <span>Speech reason</span><span className="text-[#D0D0D0]">{telemetry?.speech_reject_reason?.replaceAll('_', ' ') ?? '—'}</span>
