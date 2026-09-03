@@ -14,6 +14,12 @@ The event gate means only a significant energy departure from raw ambient. It
 has no veto: `EVENT OFF / VOICE ON / REC ON` is valid for quiet speech. Speech
 origin is diagnostic metadata only. Archived WAV chunks always remain raw.
 
+The product defaults are `voice_any_source`, 3.0 seconds of verified quiet
+audio for ambient learning, and 1.5 seconds of pre-roll. Compatibility aliases
+(`general_voice`, `radio_room`) and deprecated cold-start telemetry remain for
+older clients, but neither can change recording authorization. `EVENT` cannot
+veto confirmed voice.
+
 ## Repeatable manual check
 
 Open **Voice Pipeline / Diagnostics** while monitoring. For every run record:

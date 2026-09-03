@@ -4,9 +4,13 @@ from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
 CONFIG_PATH = os.environ.get("RECORDER_CONFIG_PATH", "config.json")
+CURRENT_CONFIG_VERSION = 2
 
 
 class AppConfig(BaseModel):
+    config_version: int = Field(
+        default=CURRENT_CONFIG_VERSION, ge=1, description="Persisted configuration schema version"
+    )
     source: Literal["microphone", "usb", "gnuradio"] = Field(
         default="microphone", description="Active audio input source"
     )
@@ -51,7 +55,10 @@ class AppConfig(BaseModel):
     adaptive_threshold: bool = True
     ambient_learning_seconds: float = Field(default=3.0, ge=1.0, le=30.0)
     ambient_learning_vad_max: float = Field(default=0.15, ge=0.0, le=0.5)
-    cold_start_vad_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    cold_start_vad_threshold: float = Field(
+        default=0.75, ge=0.0, le=1.0,
+        description="Deprecated telemetry compatibility value; never authorizes recording",
+    )
     ambient_window_seconds: float = Field(default=20.0, ge=5.0, le=120.0)
     noise_margin_db: float = Field(default=8.0, ge=1.0, le=30.0)
     minimum_snr_db: float = Field(default=6.0, ge=0.0, le=30.0)
@@ -80,12 +87,37 @@ class AppConfig(BaseModel):
     )
 
 
+def _migrate_config(data: dict) -> tuple[dict, bool]:
+    """Apply narrowly scoped, versioned product-default migrations."""
+    migrated = dict(data)
+    version = migrated.get("config_version", 1)
+    changed = "config_version" not in migrated
+
+    if version < 2:
+        legacy_defaults = {
+            "detection_profile": ("general_voice", "voice_any_source"),
+            "preroll_seconds": (1.0, 1.5),
+            "ambient_learning_seconds": (5.0, 3.0),
+        }
+        for field, (old_default, new_default) in legacy_defaults.items():
+            if field not in migrated or migrated[field] == old_default:
+                migrated[field] = new_default
+                changed = True
+        migrated["config_version"] = 2
+        changed = True
+
+    return migrated, changed
+
+
 def load_config() -> AppConfig:
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return AppConfig(**data)
+                data, migrated = _migrate_config(json.load(f))
+                config = AppConfig(**data)
+                if migrated:
+                    save_config(config)
+                return config
         except Exception as e:
             print(f"[Config] Error loading {CONFIG_PATH}: {e}. Using defaults.")
     

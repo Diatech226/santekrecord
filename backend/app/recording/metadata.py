@@ -23,7 +23,7 @@ class RecordingMetadata(BaseModel):
     frequency_hz: Optional[int] = None
     modulation: Optional[str] = None
     station_id: Optional[str] = None
-    profile: str = "radio_room"
+    profile: str = "voice_any_source"
     noise_floor_dbfs: Optional[float] = None
     dynamic_threshold_dbfs: Optional[float] = None
     average_snr_db: Optional[float] = None

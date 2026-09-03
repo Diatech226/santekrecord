@@ -294,7 +294,7 @@ export class AudioProcessorEngine {
   }
 
   private updatePreBufferCapacity() {
-    this.preBufferCapacitySamples = Math.max(1600, Math.floor(this.sampleRate * (this.settings.preroll_seconds || 1.0)));
+    this.preBufferCapacitySamples = Math.max(1600, Math.floor(this.sampleRate * (this.settings.preroll_seconds || 1.5)));
   }
 
   public setCallbacks(
