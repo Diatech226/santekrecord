@@ -767,6 +767,21 @@ export default function App() {
                 sampleRate={settings.sample_rate}
               />
 
+              {isMonitoring && (() => {
+                const vadOn = (telemetry?.vad_smoothed_probability ?? 0) >=
+                  (telemetry?.effective_vad_start_threshold ?? .5);
+                const badges = [
+                  ['VAD', vadOn],
+                  ['SPEECH', Boolean(telemetry?.effective_speech_confirmed)],
+                  ['REC', Boolean(telemetry?.recording)],
+                ] as const;
+                return <div className="grid grid-cols-3 gap-2" aria-label="Voice decision indicators">
+                  {badges.map(([label, active]) => <div key={label} className={`p-2 text-center border rounded text-[10px] font-bold ${active ? 'border-[#00FF88] text-[#00FF88] bg-[#00FF88]/10' : 'border-[#303238] text-[#707070]'}`}>
+                    {label} {active ? 'ON' : 'OFF'}
+                  </div>)}
+                </div>;
+              })()}
+
               {isMonitoring && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]" aria-label="Permanent audio levels">
                   {[
@@ -796,8 +811,13 @@ export default function App() {
 
               {isMonitoring && (
                 <details className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded text-[10px]">
-                  <summary className="cursor-pointer uppercase text-[#A0A0A0]">Diagnostics / Advanced</summary>
+                  <summary className="cursor-pointer uppercase text-[#A0A0A0]">Voice Pipeline / Diagnostics</summary>
                   <div className="grid grid-cols-2 gap-2 mt-3 text-[#707070]">
+                    <span>Input</span><span className="text-[#D0D0D0] uppercase">{telemetry?.input_signal_quality ?? '—'}</span>
+                    <span>Selected channel</span><span className="text-[#D0D0D0] uppercase">{settings.input_channel === 'auto' ? `AUTO → CH${(telemetry?.selected_channel_index ?? 0) + 1}` : telemetry?.selected_channel?.replace('_', ' ') ?? settings.input_channel}</span>
+                    <span>CH1 / CH2 RMS</span><span className="text-[#D0D0D0]">{telemetry?.channel_1_rms_dbfs?.toFixed(1) ?? '—'} / {telemetry?.channel_2_rms_dbfs?.toFixed(1) ?? '—'} dBFS</span>
+                    <span>Raw / processed level</span><span className="text-[#D0D0D0]">{telemetry?.raw_level_dbfs?.toFixed(1) ?? '—'} / {telemetry?.processed_level_dbfs?.toFixed(1) ?? '—'} dBFS</span>
+                    <span>Detection gain</span><span className="text-[#D0D0D0]">{telemetry?.effective_gain?.toFixed(2) ?? '—'}×</span>
                     <span>Device</span><span className="text-[#D0D0D0]">{telemetry?.device_name ?? settings.device_name ?? 'Default input'}</span>
                     <span>Backend state</span><span className="text-[#D0D0D0]">{telemetry?.device_connected ? 'Connected' : 'No audio input'}</span>
                     <span>Signal state</span><span className="text-[#D0D0D0] uppercase">{telemetry?.signal_state?.replaceAll('_', ' ') ?? 'Starting'}</span>
@@ -807,9 +827,15 @@ export default function App() {
                     <span>Last audio frame</span><span className="text-[#D0D0D0]">{telemetry?.last_audio_frame_ms == null ? 'Never' : `${telemetry.last_audio_frame_ms} ms ago`}</span>
                     <span>VAD Engine</span><span className="text-[#D0D0D0]">{telemetry?.vad_backend === 'silero_onnx' ? 'Silero ONNX' : telemetry?.vad_backend === 'acoustic_fallback' ? 'Acoustic fallback — ⚠ degraded detection' : telemetry?.vad_backend?.replaceAll('_', ' ') ?? 'Starting'}</span>
                     <span>Cold-start voice protection</span><span className={telemetry?.cold_start_voice_active ? 'text-[#00FF88]' : 'text-[#777]'}>{telemetry?.cold_start_voice_active ? 'ACTIVE' : 'INACTIVE'}</span>
-                    <span>Speech probability</span><span className="text-[#D0D0D0]">{speechProb.toFixed(2)}</span>
+                    <span>VAD raw / smoothed</span><span className="text-[#D0D0D0]">{telemetry?.vad_raw_probability?.toFixed(2) ?? '—'} / {telemetry?.vad_smoothed_probability?.toFixed(2) ?? speechProb.toFixed(2)}</span>
+                    <span>Start / continue / cold</span><span className="text-[#D0D0D0]">{telemetry?.effective_vad_start_threshold ?? '—'} / {telemetry?.vad_continue_threshold ?? '—'} / {settings.cold_start_vad_threshold ?? '—'}</span>
                     <span>Speech candidate</span><span className="text-[#D0D0D0]">{telemetry?.speech_candidate ? 'YES' : 'NO'}</span>
+                    <span>Speech confirmed</span><span className="text-[#D0D0D0]">{telemetry?.speech_confirmed ? 'YES' : 'NO'}</span>
+                    <span>Effective speech</span><span className="text-[#D0D0D0]">{telemetry?.effective_speech_confirmed ? 'YES' : 'NO'}</span>
+                    <span>Recorder voice / active</span><span className="text-[#D0D0D0]">{telemetry?.voice_detected ? 'YES' : 'NO'} / {telemetry?.recording ? 'ACTIVE' : 'IDLE'}</span>
                     <span>Speech reason</span><span className="text-[#D0D0D0]">{telemetry?.speech_reject_reason?.replaceAll('_', ' ') ?? '—'}</span>
+                    <span className="text-[#FFB800]">Diagnosis</span><span className="text-[#FFB800] uppercase">{telemetry?.voice_pipeline_diagnosis?.replaceAll('_', ' ') ?? '—'}</span>
+                    <span>Hint</span><span className="text-[#D0D0D0]">{telemetry?.voice_pipeline_hint ?? '—'}</span>
                     {telemetry?.vad_model_loaded === false && <><span className="text-[#FFB800]">VAD warning</span><span className="text-[#FFB800]">⚠ Silero unavailable</span></>}
                   </div>
                 </details>

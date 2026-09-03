@@ -5,6 +5,7 @@ import time
 from typing import Optional, List, Dict, Any
 import numpy as np
 from .base import AudioSource
+from .channel_selector import StableChannelSelector
 
 try:
     import sounddevice as sd
@@ -39,6 +40,7 @@ class MicrophoneSource(AudioSource):
         self.callback_count = 0
         self.last_callback_at: Optional[float] = None
         self._callback_log_at = 0.0
+        self.channel_selector = StableChannelSelector(input_channel)
 
     @classmethod
     def _detect_usb_cards_from_proc(cls) -> set:
@@ -136,17 +138,7 @@ class MicrophoneSource(AudioSource):
             # Do not average stereo interface inputs: balanced/opposite-polarity
             # channels can cancel and many USB adapters only carry signal on one
             # side. Auto follows the channel with the greatest RMS energy.
-            if indata.ndim > 1 and indata.shape[1] > 1:
-                if self.input_channel == "channel_1":
-                    channel_index = 0
-                elif self.input_channel == "channel_2":
-                    channel_index = min(1, indata.shape[1] - 1)
-                else:
-                    channel_rms = np.sqrt(np.mean(np.square(indata), axis=0))
-                    channel_index = int(np.argmax(channel_rms))
-                mono_chunk = indata[:, channel_index].copy()
-            else:
-                mono_chunk = indata.reshape(-1).copy()
+            mono_chunk = self.channel_selector.select(indata)
             self.callback_frames += int(frames)
             self.callback_count += 1
             self.last_callback_at = time.time()

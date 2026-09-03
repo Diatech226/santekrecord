@@ -66,6 +66,9 @@ def test_vad_probability_has_fast_attack_and_slow_release(monkeypatch):
     assert vad.get_speech_probability(frame) == .04
     assert vad.get_speech_probability(frame) == .91
     assert .70 < vad.get_speech_probability(frame) < .91
+    diagnostics = vad.diagnostics()
+    assert diagnostics["vad_raw_probability"] == .20
+    assert diagnostics["vad_smoothed_probability"] == vad.last_smoothed_probability
 
 
 def test_reject_reason_vad_low():

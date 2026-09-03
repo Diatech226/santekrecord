@@ -14,6 +14,7 @@ from typing import Optional
 import numpy as np
 
 from .base import AudioSource
+from .channel_selector import StableChannelSelector
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class ALSAArecordSource(AudioSource):
         self._process: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
         self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
+        self.channel_selector = StableChannelSelector(input_channel)
 
     def start(self) -> None:
         if not shutil.which("arecord"):
@@ -112,7 +114,9 @@ class ALSAArecordSource(AudioSource):
             data = self._process.stdout.read(byte_count)
             if not data:
                 break
-            chunk = pcm16_to_float32(data, self.capture_channels, self.input_channel)
+            raw = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+            raw = raw[:len(raw) - len(raw) % self.capture_channels].reshape(-1, self.capture_channels)
+            chunk = self.channel_selector.select(raw)
             self.callback_count += 1
             self.callback_frames += len(chunk)
             self.last_callback_at = time.time()

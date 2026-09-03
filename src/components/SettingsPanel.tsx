@@ -99,29 +99,24 @@ export const SettingsPanel: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Voice Confidence (VAD Threshold) Slider */}
         {(settings.trigger_mode === 'db_vad' || settings.trigger_mode === 'vad_only') && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#A0A0A0] uppercase tracking-wider">{t.vadConfidence}</span>
-              <span className="text-[#00F0FF] font-mono font-bold">{settings.vad_threshold.toFixed(2)}</span>
+          <details className="text-[10px] border border-[#202226] rounded p-2">
+            <summary className="cursor-pointer text-[#00F0FF] uppercase">Advanced VAD thresholds</summary>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              {([
+                ['VAD Start', 'vad_start_threshold', settings.vad_start_threshold ?? .5, 0, 1, .05],
+                ['VAD Continue', 'vad_stop_threshold', settings.vad_stop_threshold ?? .3, 0, 1, .05],
+                ['Cold Start', 'cold_start_vad_threshold', settings.cold_start_vad_threshold ?? .75, 0, 1, .05],
+                ['Minimum SNR', 'minimum_snr_db', settings.minimum_snr_db ?? 3, 0, 20, 1],
+                ['Minimum Speech', 'minimum_speech_ms', settings.minimum_speech_ms ?? 120, 40, 1000, 20],
+              ] as const).map(([label, key, value, min, max, step]) => <label key={key} className="space-y-1">
+                <span className="flex justify-between text-[#A0A0A0]"><b>{label}</b><em>{value}{key.endsWith('_ms') ? ' ms' : key.includes('snr') ? ' dB' : ''}</em></span>
+                <input type="range" min={min} max={max} step={step} disabled={disabled} value={value}
+                  onChange={(e) => onUpdateSettings({ [key]: Number(e.target.value) })}
+                  className="w-full accent-[#00F0FF]" />
+              </label>)}
             </div>
-            <input
-              id="vad-confidence-slider"
-              type="range"
-              min="0.20"
-              max="0.95"
-              step="0.05"
-              disabled={disabled}
-              value={settings.vad_threshold}
-              onChange={(e) => onUpdateSettings({ vad_threshold: Number(e.target.value) })}
-              className="w-full accent-[#00F0FF] h-1.5 bg-[#1A1B1F] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
-            />
-            <div className="flex justify-between text-[9px] text-[#606060] font-mono">
-              <span>{t.permissive}</span>
-              <span>{t.strictVoice}</span>
-            </div>
-          </div>
+          </details>
         )}
 
         {/* Pre-record & Stop after silence Grid */}
