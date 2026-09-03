@@ -16,8 +16,12 @@ def engine(tmp_path, profile="general_voice"):
     return result
 
 
-def decision(speech=True, radio=False):
-    return SimpleNamespace(speech_confirmed=speech, radio_activity=radio)
+def decision(speech=True, radio=False, candidate=None):
+    return SimpleNamespace(
+        speech_confirmed=speech,
+        radio_activity=radio,
+        is_candidate=speech if candidate is None else candidate,
+    )
 
 
 def trigger_recorder(subject, probability=.90, radio=False):
@@ -50,6 +54,83 @@ def test_cold_start_low_vad_does_not_trigger(tmp_path):
     subject = engine(tmp_path)
     _status, _voice, recording = trigger_recorder(subject, probability=.25)
     assert not recording and not subject.effective_speech_confirmed
+
+
+def test_cold_start_trigger_then_lower_vad_keeps_speech(tmp_path):
+    subject = engine(tmp_path)
+    trigger_recorder(subject, probability=.90)
+    assert subject.recorder.is_recording
+    assert subject._effective_confirmation(decision(), .68)
+    assert subject.cold_start_voice_triggered
+
+
+def test_cold_start_active_recording_uses_normal_speech_hysteresis(tmp_path):
+    subject = engine(tmp_path)
+    trigger_recorder(subject, probability=.90)
+    assert subject._effective_confirmation(decision(speech=True), .55)
+    assert not subject._effective_confirmation(decision(speech=False), .55)
+
+
+def test_cold_start_threshold_only_applies_before_recording(tmp_path):
+    subject = engine(tmp_path)
+    assert not subject._effective_confirmation(decision(), .60)
+    assert not subject.recorder.is_recording
+    trigger_recorder(subject, probability=.90)
+    assert subject._effective_confirmation(decision(), .60)
+
+
+def test_radio_room_cold_start_does_not_require_high_vad_after_trigger(tmp_path):
+    subject = engine(tmp_path, "radio_room")
+    _status, _voice, recording = trigger_recorder(subject, .92, radio=True)
+    assert recording
+    assert subject._effective_confirmation(decision(radio=True), .63)
+    assert subject.recorder.is_recording
+
+
+def test_cold_start_flags_reset_on_restart(tmp_path):
+    subject = engine(tmp_path)
+    trigger_recorder(subject)
+    assert subject.cold_start_voice_triggered
+    subject.stop()
+    assert not subject.cold_start_mode_active
+    assert not subject.cold_start_voice_triggered
+    subject.cold_start_voice_triggered = True
+    subject._reset_cold_start_state()
+    assert not subject.cold_start_voice_triggered
+
+
+def test_cold_start_sequence_stays_in_one_communication_until_natural_silence(tmp_path):
+    subject = engine(tmp_path)
+    probabilities = [.92, .83, .68, .58, .40, .20]
+    confirmations = [True, True, True, True, True, False]
+    communication_ids = []
+
+    for probability, confirmed in zip(probabilities, confirmations):
+        effective = subject._effective_confirmation(
+            decision(speech=confirmed, candidate=confirmed), probability
+        )
+        subject.recorder.process_frame(
+            np.zeros(1024, np.float32), -30, probability,
+            speech_confirmed=effective, candidate=confirmed,
+        )
+        if subject.recorder.session_manager.session:
+            communication_ids.append(
+                subject.recorder.session_manager.session.communication_id
+            )
+
+    assert len(set(communication_ids)) == 1
+    assert subject.recorder.is_recording
+    assert not subject.effective_speech_confirmed
+    assert subject.recorder.transmission_manager.current is not None
+
+
+def test_cold_start_telemetry_distinguishes_mode_and_trigger(tmp_path):
+    subject = engine(tmp_path)
+    assert subject._effective_confirmation(decision(), .90)
+    telemetry = subject.get_telemetry()
+    assert telemetry["cold_start_mode_active"]
+    assert telemetry["cold_start_voice_triggered"]
+    assert telemetry["cold_start_vad_threshold"] == .75
 
 
 def test_ambient_learning_resumes_after_cold_start_communication(tmp_path):

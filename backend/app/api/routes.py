@@ -84,6 +84,8 @@ def audio_diagnostics(engine=Depends(get_engine)):
         "vad_model_loaded": telemetry.get("vad_model_loaded"),
         "vad_error": telemetry.get("vad_error"),
         "cold_start_voice_active": telemetry.get("cold_start_voice_active"),
+        "cold_start_mode_active": telemetry.get("cold_start_mode_active"),
+        "cold_start_voice_triggered": telemetry.get("cold_start_voice_triggered"),
         "cold_start_vad_threshold": telemetry.get("cold_start_vad_threshold"),
         "effective_speech_confirmed": telemetry.get("effective_speech_confirmed"),
         "ambient_learning_paused_for_voice": telemetry.get("ambient_learning_paused_for_voice"),
