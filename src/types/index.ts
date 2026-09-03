@@ -132,6 +132,8 @@ export interface MonitorUpdate {
   timestamp?: number;
   level_dbfs: number;
   speech_probability: number;
+  vad_raw_probability?: number;
+  vad_smoothed_probability?: number;
   voice_detected: boolean;
   recording: boolean;
   status: EngineStatus;
@@ -154,6 +156,7 @@ export interface MonitorUpdate {
   effective_speech_confirmed?: boolean;
   ambient_learning_paused_for_voice?: boolean;
   speech_candidate?: boolean;
+  speech_confirmed?: boolean;
   speech_reject_reason?: string;
   minimum_snr_db?: number;
   ambient_learned_seconds?: number;
@@ -192,6 +195,21 @@ export interface MonitorUpdate {
   alsa_device?: string | null;
   hostapi?: string;
   input_channel?: string;
+  selected_channel?: string;
+  selected_channel_index?: number;
+  channel_1_rms_dbfs?: number;
+  channel_2_rms_dbfs?: number;
+  raw_level_dbfs?: number;
+  processed_level_dbfs?: number;
+  raw_peak_dbfs?: number;
+  processed_peak_dbfs?: number;
+  sample_rms?: number;
+  sample_abs_max?: number;
+  input_signal_quality?: 'silent' | 'very_low' | 'low' | 'usable' | 'strong' | 'clipping';
+  signal_present_but_vad_inactive?: boolean;
+  voice_pipeline_diagnosis?: string;
+  voice_pipeline_hint?: string;
+  vad_continue_threshold?: number;
   communication_active?: boolean;
   communication_id?: string | null;
   current_transmission?: number;

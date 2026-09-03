@@ -57,6 +57,8 @@ class MainAudioEngine:
         # Metrics for monitoring
         self.current_level_dbfs = -90.0
         self.current_peak_dbfs = -90.0
+        self.raw_level_dbfs = -90.0
+        self.raw_peak_dbfs = -90.0
         self.noise_floor_dbfs = -90.0
         self.frames_received = 0
         self.last_audio_frame_at: Optional[float] = None
@@ -79,6 +81,7 @@ class MainAudioEngine:
         self.ambient_learning = False
         self.ambient_learned_samples = 0
         self.current_speech_candidate = False
+        self.current_speech_confirmed = False
         self.current_speech_reject_reason = "vad_too_low"
         self.cold_start_mode_active = False
         self.cold_start_voice_triggered = False
@@ -86,6 +89,7 @@ class MainAudioEngine:
         self.cold_start_voice_active = False
         self.effective_speech_confirmed = False
         self.ambient_learning_paused_for_voice = False
+        self._vad_inactive_frames = 0
 
         # Subscribers (e.g. WebSocket broadcast queues)
         self._listeners: List[Callable[[Dict[str, Any]], None]] = []
@@ -123,6 +127,7 @@ class MainAudioEngine:
             "configured_minimum_speech_ms": self.config.minimum_speech_ms,
             "effective_vad_start_threshold": self.speech_detector.start,
             "effective_vad_stop_threshold": self.speech_detector.continue_,
+            "vad_continue_threshold": self.speech_detector.continue_,
             "effective_minimum_snr_db": self.speech_detector.minimum_snr,
             "effective_minimum_speech_ms": self.speech_detector.minimum_speech_ms,
         }
@@ -175,6 +180,55 @@ class MainAudioEngine:
         self.cold_start_voice_active = False
         self.effective_speech_confirmed = False
         self.ambient_learning_paused_for_voice = False
+
+    def _prepare_detection_chunk(self, chunk):
+        """Return finite gain-adjusted detection audio; never mutate archive audio."""
+        raw = np.asarray(chunk, dtype=np.float32).reshape(-1).copy()
+        if not np.isfinite(raw).all():
+            raw = np.nan_to_num(raw, nan=0.0, posinf=1.0, neginf=-1.0)
+        raw_rms, raw_dbfs = self.rms_detector.process_chunk(raw)
+        raw_peak = float(np.max(np.abs(raw))) if raw.size else 0.0
+        self.raw_level_dbfs = round(raw_dbfs, 1)
+        self.raw_peak_dbfs = round(self.rms_detector.rms_to_dbfs(raw_peak), 1)
+        if self.config.auto_gain_control:
+            target = 10 ** ((-30.0 - raw_dbfs) / 20.0) if raw_rms > 1e-5 else 1.0
+            target = float(np.clip(target, .25, 8.0))
+            if raw_peak:
+                target = min(target, .98 / raw_peak)
+            rate = .25 if target > self.effective_gain else .08
+            self.effective_gain += rate * (target - self.effective_gain)
+        else:
+            self.effective_gain = self.config.input_gain
+        return raw, np.clip(raw * self.effective_gain, -1.0, 1.0).astype(np.float32)
+
+    @staticmethod
+    def classify_signal(level_dbfs, peak_dbfs):
+        if peak_dbfs >= -.2: return "clipping"
+        if level_dbfs <= -85: return "silent"
+        if level_dbfs <= -65: return "very_low"
+        if level_dbfs <= -50: return "low"
+        if level_dbfs <= -20: return "usable"
+        return "strong"
+
+    def _pipeline_diagnosis(self):
+        quality = self.classify_signal(self.current_level_dbfs, self.current_peak_dbfs)
+        if quality == "silent": return "no_audio", "No usable audio samples are arriving."
+        if quality in ("very_low", "low"):
+            return "input_too_low", "Input is too low; check hardware level or detection gain."
+        if self._vad_inactive_frames >= 6:
+            return "vad_inactive", ("Audio signal detected but Silero VAD probability remains very low. "
+                                    "Check channel selection, input routing or VAD preprocessing.")
+        if not self.current_speech_candidate and self.current_speech_prob >= self.speech_detector.start:
+            reason = self.current_speech_reject_reason
+            return ("snr_too_low" if reason == "snr_too_low" else "vad_inactive",
+                    f"SpeechDetector rejection: {reason}")
+        if self.current_speech_candidate and not self.current_speech_confirmed:
+            return "minimum_duration", "Candidate is waiting for minimum speech duration."
+        if self.current_speech_confirmed and not self.effective_speech_confirmed:
+            return "cold_start_threshold", "Speech is blocked by the cold-start threshold."
+        if self.effective_speech_confirmed and not self.recorder.is_recording:
+            return "speech_confirmed", "Speech is confirmed; recorder has not activated yet."
+        return "ok", "Voice pipeline is operating normally."
 
     def unsubscribe(self, callback: Callable[[Dict[str, Any]], None]):
         if callback in self._listeners:
@@ -383,15 +437,7 @@ class MainAudioEngine:
                     continue
 
                 # Split paths: archive remains the captured signal; gain is detection-only.
-                raw_chunk = np.asarray(chunk, dtype=np.float32).copy()
-                if self.config.auto_gain_control:
-                    raw_rms, raw_dbfs = self.rms_detector.process_chunk(chunk)
-                    target_gain = 10 ** ((-30.0 - raw_dbfs) / 20.0) if raw_rms > 0 else 1.0
-                    target_gain = float(np.clip(target_gain, 0.25, 8.0))
-                    self.effective_gain = 0.9 * self.effective_gain + 0.1 * target_gain
-                else:
-                    self.effective_gain = self.config.input_gain
-                chunk = np.clip(raw_chunk * self.effective_gain, -1.0, 1.0).astype(np.float32)
+                raw_chunk, chunk = self._prepare_detection_chunk(chunk)
 
                 # Preserve real processed samples for the realtime chart.
                 indices = np.linspace(0, len(chunk) - 1, 128).astype(int)
@@ -421,6 +467,10 @@ class MainAudioEngine:
                 # 2. Compute Voice Activity Detection (Silero VAD)
                 speech_prob = self.vad_detector.get_speech_probability(chunk)
                 self.current_speech_prob = round(speech_prob, 2)
+                if dbfs > -50 and speech_prob < .10:
+                    self._vad_inactive_frames += 1
+                else:
+                    self._vad_inactive_frames = 0
 
                 noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
                 decision = self.speech_detector.process(
@@ -468,6 +518,7 @@ class MainAudioEngine:
                 self.current_radio_activity = decision.radio_activity
                 self.current_radio_activity_score = decision.radio_activity_score
                 self.current_speech_candidate = decision.is_candidate
+                self.current_speech_confirmed = decision.speech_confirmed
                 self.current_speech_reject_reason = (
                     "ambient_learning_active" if self.ambient_learning else decision.reject_reason
                 )
@@ -537,9 +588,17 @@ class MainAudioEngine:
             signal_state = "voice"
         else:
             signal_state = "signal"
+        diagnosis, hint = self._pipeline_diagnosis()
+        selector = getattr(source, "channel_selector", None)
+        selected_index = getattr(selector, "selected_index", 0)
+        channel_levels = getattr(selector, "channel_rms_dbfs", [self.raw_level_dbfs, -100.0])
         return {
             "timestamp": now,
             "level_dbfs": self.current_level_dbfs,
+            "raw_level_dbfs": self.raw_level_dbfs,
+            "processed_level_dbfs": self.current_level_dbfs,
+            "raw_peak_dbfs": self.raw_peak_dbfs,
+            "processed_peak_dbfs": self.current_peak_dbfs,
             "rms_dbfs": self.current_level_dbfs,
             "peak_dbfs": self.current_peak_dbfs,
             "noise_floor_dbfs": self.noise_floor_dbfs,
@@ -566,6 +625,7 @@ class MainAudioEngine:
             "ambient_profile_source": self.ambient_profile_source,
             "speech_probability": self.current_speech_prob,
             "speech_candidate": self.current_speech_candidate,
+            "speech_confirmed": self.current_speech_confirmed,
             "speech_reject_reason": self.current_speech_reject_reason,
             "minimum_snr_db": self.speech_detector.minimum_snr,
             "voice_detected": self.current_voice_detected,
@@ -592,6 +652,14 @@ class MainAudioEngine:
             "capture_backend": "alsa" if isinstance(source, ALSAArecordSource) else "portaudio",
             "alsa_device": getattr(getattr(source, "alsa_device", None), "identifier", None),
             "input_channel": self.config.input_channel,
+            "selected_channel": getattr(selector, "selected_channel", "channel_1"),
+            "selected_channel_index": selected_index,
+            "channel_1_rms_dbfs": round(channel_levels[0], 1),
+            "channel_2_rms_dbfs": round(channel_levels[1], 1),
+            "input_signal_quality": self.classify_signal(self.current_level_dbfs, self.current_peak_dbfs),
+            "signal_present_but_vad_inactive": self._vad_inactive_frames >= 6,
+            "voice_pipeline_diagnosis": diagnosis,
+            "voice_pipeline_hint": hint,
             "effective_gain": round(self.effective_gain, 3),
             "agc_active": self.config.auto_gain_control,
             "waveform": self.current_waveform,

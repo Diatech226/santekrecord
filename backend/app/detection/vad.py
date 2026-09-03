@@ -33,6 +33,10 @@ class SileroVADDetector:
         self._pending = np.empty(0, dtype=np.float32)
         self._recent = deque(maxlen=3)
         self._smoothed_probability = 0.0
+        self.last_raw_probability = 0.0
+        self.last_smoothed_probability = 0.0
+        self.last_input_rms = 0.0
+        self.last_input_abs_max = 0.0
         self._init_model()
 
     def _init_model(self):
@@ -68,6 +72,12 @@ class SileroVADDetector:
     def get_speech_probability(self, chunk):
         chunk = np.asarray(chunk, dtype=np.float32).reshape(-1)
         if not len(chunk): return 0.0
+        if not np.isfinite(chunk).all():
+            self.vad_error = "Non-finite samples replaced before VAD inference"
+            chunk = np.nan_to_num(chunk, nan=0.0, posinf=1.0, neginf=-1.0)
+        chunk = np.clip(chunk, -1.0, 1.0).astype(np.float32, copy=False)
+        self.last_input_rms = float(np.sqrt(np.mean(np.square(chunk, dtype=np.float64))))
+        self.last_input_abs_max = float(np.max(np.abs(chunk)))
         self._pending = np.concatenate((self._pending, chunk))
         probabilities = []
         while len(self._pending) >= self.frame_samples:
@@ -75,6 +85,7 @@ class SileroVADDetector:
             probabilities.append(self._infer_frame(frame))
         if probabilities:
             current = max(probabilities)
+            self.last_raw_probability = float(current)
             self._recent.append(current)
             # Fast attack preserves the first voiced frame. Slow release avoids
             # chatter on short dips without averaging speech with old silence.
@@ -82,6 +93,7 @@ class SileroVADDetector:
                 self._smoothed_probability = current
             else:
                 self._smoothed_probability = .75 * self._smoothed_probability + .25 * current
+            self.last_smoothed_probability = float(self._smoothed_probability)
         return float(self._smoothed_probability)
 
     def reset(self):
@@ -89,6 +101,10 @@ class SileroVADDetector:
         self._pending = np.empty(0, dtype=np.float32)
         self._recent.clear()
         self._smoothed_probability = 0.0
+        self.last_raw_probability = 0.0
+        self.last_smoothed_probability = 0.0
+        self.last_input_rms = 0.0
+        self.last_input_abs_max = 0.0
         self._onnx_state = np.zeros((2, 1, 128), dtype=np.float32)
         if self.model is not None:
             reset_states = getattr(self.model, "reset_states", None)
@@ -135,4 +151,9 @@ class SileroVADDetector:
         return float(np.clip(.58 * ratio + .30 * zcr_score + .12 * level_score, 0, .92))
 
     def diagnostics(self):
-        return {"vad_backend": self.vad_backend, "vad_model_loaded": self.vad_model_loaded, "vad_error": self.vad_error}
+        return {"vad_backend": self.vad_backend, "vad_model_loaded": self.vad_model_loaded,
+                "vad_error": self.vad_error,
+                "vad_raw_probability": round(self.last_raw_probability, 4),
+                "vad_smoothed_probability": round(self.last_smoothed_probability, 4),
+                "sample_rms": round(self.last_input_rms, 7),
+                "sample_abs_max": round(self.last_input_abs_max, 7)}
