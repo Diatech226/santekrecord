@@ -61,10 +61,15 @@ class MainAudioEngine:
         self.raw_level_dbfs = -90.0
         self.raw_peak_dbfs = -90.0
         self.noise_floor_dbfs = -90.0
+        # A small, level-only ambient estimator for the raw event path.  The
+        # richer AdaptiveNoiseProfile intentionally remains in the processed
+        # detection domain for SNR/spectrum diagnostics.
+        self.raw_noise_floor_dbfs = -90.0
         self.frames_received = 0
         self.last_audio_frame_at: Optional[float] = None
         self.started_at: Optional[float] = None
         self._noise_levels = collections.deque(maxlen=240)
+        self._raw_ambient_levels = collections.deque(maxlen=240)
         self.current_speech_prob = 0.0
         self.current_voice_detected = False
         self.current_status = "idle"
@@ -194,6 +199,28 @@ class MainAudioEngine:
             self.effective_gain = self.config.input_gain
         return raw, np.clip(raw * self.effective_gain, -1.0, 1.0).astype(np.float32)
 
+    def _raw_ambient_baseline(self, raw_dbfs: float) -> float:
+        """Return a robust raw baseline without allowing short peaks to move it."""
+        if not self._raw_ambient_levels:
+            return float(raw_dbfs)
+        # The lower half of the window follows a changing room floor but is
+        # insensitive to isolated knocks and speech bursts.
+        values = np.asarray(self._raw_ambient_levels, dtype=np.float32)
+        return float(np.percentile(values, 40))
+
+    def _learn_raw_ambient(self, raw_dbfs: float, speech_probability: float,
+                           decision, event_active: bool) -> None:
+        if speech_probability >= self.config.ambient_learning_vad_max:
+            return
+        if decision.is_candidate or decision.speech_confirmed or self.recorder.is_recording:
+            return
+        baseline = self._raw_ambient_baseline(raw_dbfs)
+        # Bootstrap freely, then reject significant upward departures. Downward
+        # changes are safe and let the estimator follow a quieter environment.
+        if len(self._raw_ambient_levels) < 8 or raw_dbfs <= baseline + 3.0 or not event_active:
+            self._raw_ambient_levels.append(float(raw_dbfs))
+            self.raw_noise_floor_dbfs = round(self._raw_ambient_baseline(raw_dbfs), 1)
+
     @staticmethod
     def classify_signal(level_dbfs, peak_dbfs):
         if peak_dbfs >= -.2: return "clipping"
@@ -204,7 +231,11 @@ class MainAudioEngine:
         return "strong"
 
     def _pipeline_diagnosis(self):
-        quality = self.classify_signal(self.current_level_dbfs, self.current_peak_dbfs)
+        # Fall back to the historical processed fields for integrations/tests
+        # which populate diagnostic state directly rather than capture a frame.
+        level = self.raw_level_dbfs if self.raw_level_dbfs > -90 else self.current_level_dbfs
+        peak = self.raw_peak_dbfs if self.raw_peak_dbfs > -90 else self.current_peak_dbfs
+        quality = self.classify_signal(level, peak)
         if quality == "silent": return "no_audio", "No usable audio samples are arriving."
         if quality in ("very_low", "low"):
             return "input_too_low", "Input is too low; check hardware level or detection gain."
@@ -218,9 +249,13 @@ class MainAudioEngine:
         if self.current_speech_candidate and not self.current_speech_confirmed:
             return "minimum_duration", "Candidate is waiting for minimum speech duration."
         if self.current_speech_confirmed and not self.effective_speech_confirmed:
-            return "cold_start_threshold", "Speech is blocked by the cold-start threshold."
+            return "recorder_not_started", "Confirmed voice did not reach the recorder; inspect the pipeline error."
         if self.effective_speech_confirmed and not self.recorder.is_recording:
-            return "speech_confirmed", "Speech is confirmed; recorder has not activated yet."
+            return "recorder_not_started", "Voice is confirmed; recorder has not activated yet."
+        if self.current_speech_confirmed:
+            return "voice_confirmed", "Human voice is confirmed and authorizes recording."
+        if not self.current_event_active:
+            return "event_below_threshold", "Raw level is below the event threshold; VAD still remains active."
         return "ok", "Voice pipeline is operating normally."
 
     def unsubscribe(self, callback: Callable[[Dict[str, Any]], None]):
@@ -329,6 +364,8 @@ class MainAudioEngine:
         self.vad_detector.reset()
         self.speech_detector.reset()
         self.event_gate.reset()
+        self._raw_ambient_levels.clear()
+        self.raw_noise_floor_dbfs = -90.0
         self.ambient_learned_samples = 0
         self._ambient_device_name = getattr(self.source, "device_name", None) or self.config.device_name
         cached = self.ambient_profile_store.load(self.config, self._ambient_device_name)
@@ -459,7 +496,7 @@ class MainAudioEngine:
                 # Manual calibration, like startup learning, counts verified
                 # quiet audio rather than elapsed wall-clock time.
                 if self._is_calibrating and speech_prob < self.config.ambient_learning_vad_max:
-                    self._calibration_levels.append(dbfs)
+                    self._calibration_levels.append(self.raw_level_dbfs)
                 self.current_speech_prob = round(speech_prob, 2)
                 if dbfs > -50 and speech_prob < .10:
                     self._vad_inactive_frames += 1
@@ -467,7 +504,9 @@ class MainAudioEngine:
                     self._vad_inactive_frames = 0
 
                 noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
-                event = self.event_gate.process(dbfs, noise_metrics.noise_floor_dbfs)
+                raw_ambient = self._raw_ambient_baseline(self.raw_level_dbfs)
+                self.raw_noise_floor_dbfs = round(raw_ambient, 1)
+                event = self.event_gate.process(self.raw_level_dbfs, raw_ambient)
                 self.current_event_active = event.event_active
                 decision = self.speech_detector.process(
                     speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
@@ -475,9 +514,14 @@ class MainAudioEngine:
                     noise_metrics.spectral_difference,
                 )
                 effective_speech_confirmed = self._effective_confirmation(decision, speech_prob)
-                if not event.event_active and not self.recorder.is_recording:
-                    effective_speech_confirmed = False
-                    self.effective_speech_confirmed = False
+                # Product invariant: a confirmed human voice is the complete
+                # recording authorization. The raw event gate is diagnostic.
+                human_voice_confirmed = bool(decision.speech_confirmed)
+                record_authorized = human_voice_confirmed
+                effective_speech_confirmed = record_authorized
+                self.effective_speech_confirmed = record_authorized
+                self._learn_raw_ambient(
+                    self.raw_level_dbfs, speech_prob, decision, event.event_active)
                 cold_start_voice = bool(
                     self.cold_start_mode_active and self.cold_start_voice_triggered
                 )
@@ -530,6 +574,9 @@ class MainAudioEngine:
                     radio_activity=decision.radio_activity,
                     confidence=decision.confidence,
                     metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
+                             "raw_noise_floor_dbfs": raw_ambient,
+                             "raw_level_dbfs": self.raw_level_dbfs,
+                             "event_delta_db": event.delta_db,
                              "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
                              "snr_db": noise_metrics.broadband_snr_db,
                              "speech_band_snr_db": noise_metrics.speech_band_snr_db,
@@ -600,12 +647,14 @@ class MainAudioEngine:
             "rms_dbfs": self.current_level_dbfs,
             "peak_dbfs": self.current_peak_dbfs,
             "noise_floor_dbfs": self.noise_floor_dbfs,
+            "raw_noise_floor_dbfs": self.raw_noise_floor_dbfs,
             "threshold_dbfs": self.config.threshold_dbfs,
             "dynamic_threshold_dbfs": self.current_dynamic_threshold,
             "event_active": self.current_event_active,
-            "event_start_threshold_dbfs": self.noise_floor_dbfs + self.event_gate.start_margin_db,
-            "event_continue_threshold_dbfs": self.noise_floor_dbfs + self.event_gate.continue_margin_db,
-            "event_end_threshold_dbfs": self.noise_floor_dbfs + self.event_gate.end_margin_db,
+            "event_delta_db": round(self.raw_level_dbfs - self.raw_noise_floor_dbfs, 1),
+            "event_start_threshold_dbfs": min(0.0, self.raw_noise_floor_dbfs + self.event_gate.start_margin_db),
+            "event_continue_threshold_dbfs": min(0.0, self.raw_noise_floor_dbfs + self.event_gate.continue_margin_db),
+            "event_end_threshold_dbfs": min(0.0, self.raw_noise_floor_dbfs + self.event_gate.end_margin_db),
             "snr_db": self.current_snr,
             "speech_band_snr_db": self.current_speech_band_snr,
             "spectral_change": self.current_spectral_change,
@@ -658,7 +707,7 @@ class MainAudioEngine:
             "selected_channel_index": selected_index,
             "channel_1_rms_dbfs": round(channel_levels[0], 1),
             "channel_2_rms_dbfs": round(channel_levels[1], 1),
-            "input_signal_quality": self.classify_signal(self.current_level_dbfs, self.current_peak_dbfs),
+            "input_signal_quality": self.classify_signal(self.raw_level_dbfs, self.raw_peak_dbfs),
             "signal_present_but_vad_inactive": self._vad_inactive_frames >= 6,
             "voice_pipeline_diagnosis": diagnosis,
             "voice_pipeline_hint": hint,

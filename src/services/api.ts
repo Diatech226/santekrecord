@@ -227,7 +227,7 @@ export const api = {
     throw new Error('FastAPI hardware diagnostics are unavailable');
   },
 
-  async calibrateNoise(): Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number }> {
+  async calibrateNoise(): Promise<{ noise_floor_dbfs: number; recommended_threshold_dbfs: number; margin_db: number; quiet_seconds: number }> {
     const res = await fetch(`${API_BASE}/calibrate`, { method: 'POST' });
     if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
     return await res.json();
