@@ -35,10 +35,10 @@ export default function App() {
     trigger_mode: 'db_vad',
     threshold_dbfs: -38,
     vad_threshold: 0.6,
-    preroll_seconds: 1.0,
+    preroll_seconds: 1.5,
     silence_seconds: 2.0,
     // Bootstrap values mirror config.json only until the backend response arrives.
-    detection_profile: 'general_voice',
+    detection_profile: 'voice_any_source',
     adaptive_noise: true,
     adaptive_threshold: true,
     ambient_learning_seconds: 5,
@@ -771,8 +771,8 @@ export default function App() {
                 const vadOn = (telemetry?.vad_smoothed_probability ?? 0) >=
                   (telemetry?.effective_vad_start_threshold ?? .5);
                 const badges = [
-                  ['VAD', vadOn],
-                  ['SPEECH', Boolean(telemetry?.effective_speech_confirmed)],
+                  ['EVENT', Boolean(telemetry?.event_active)],
+                  ['VOICE', Boolean(telemetry?.effective_speech_confirmed)],
                   ['REC', Boolean(telemetry?.recording)],
                 ] as const;
                 return <div className="grid grid-cols-3 gap-2" aria-label="Voice decision indicators">
@@ -799,7 +799,7 @@ export default function App() {
                     }[telemetry?.transmission_state ?? ''] ?? (
                       telemetry?.session_state === 'waiting_reply' ? 'WAITING FOR REPLY' :
                       telemetry?.session_state === 'saving_communication' ? 'SAVING COMMUNICATION' :
-                      telemetry?.radio_activity ? 'RADIO ACTIVITY' : voiceDetected ? 'VOICE' : status.replaceAll('_', ' ').toUpperCase()
+                      telemetry?.event_active ? 'EVENT ACTIVE' : voiceDetected ? 'VOICE' : status.replaceAll('_', ' ').toUpperCase()
                     ))],
                   ].map(([label, value]) => (
                     <div key={label} className="p-2 bg-[#0A0B0D] border border-[#1A1B1F] rounded">

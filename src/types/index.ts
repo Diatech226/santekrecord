@@ -103,7 +103,7 @@ export interface AppSettings {
   input_channel?: 'auto' | 'channel_1' | 'channel_2';
   // Automatic Gain Control (AGC) based on ambient noise floor measurements
   auto_gain_control?: boolean;
-  detection_profile?: 'radio_room' | 'general_voice';
+  detection_profile?: 'voice_any_source' | 'radio_room' | 'general_voice';
   adaptive_noise?: boolean;
   adaptive_threshold?: boolean;
   ambient_learning_seconds?: number;
@@ -143,6 +143,10 @@ export interface MonitorUpdate {
   noise_floor_dbfs?: number;
   threshold_dbfs?: number;
   dynamic_threshold_dbfs?: number;
+  event_active?: boolean;
+  event_start_threshold_dbfs?: number;
+  event_continue_threshold_dbfs?: number;
+  event_end_threshold_dbfs?: number;
   snr_db?: number;
   speech_band_snr_db?: number;
   spectral_change?: number;
@@ -164,7 +168,7 @@ export interface MonitorUpdate {
   ambient_profile_age_seconds?: number | null;
   ambient_profile_key?: string;
   ambient_profile_source?: 'cached' | 'learning';
-  detection_profile?: 'radio_room' | 'general_voice';
+  detection_profile?: 'voice_any_source' | 'radio_room' | 'general_voice';
   configured_vad_start_threshold?: number;
   configured_vad_stop_threshold?: number;
   configured_minimum_snr_db?: number;

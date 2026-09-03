@@ -20,6 +20,8 @@ class AmbientProfileStore:
             "source": config.source,
             "device_name": device_name or config.device_name or "default",
             "input_channel": config.input_channel,
+            "input_gain": config.input_gain,
+            "auto_gain_control": config.auto_gain_control,
             "sample_rate": config.sample_rate,
             "detection_profile": config.detection_profile,
         }
@@ -27,7 +29,8 @@ class AmbientProfileStore:
     def key(self, config, device_name=None):
         identity = self.identity(config, device_name)
         readable = "__".join(str(identity[name]) for name in (
-            "source", "device_name", "input_channel", "sample_rate", "detection_profile"))
+            "source", "device_name", "input_channel", "input_gain",
+            "auto_gain_control", "sample_rate", "detection_profile"))
         safe = "".join(char if char.isalnum() or char in "-_" else "_" for char in readable)
         digest = hashlib.sha256(readable.encode()).hexdigest()[:10]
         return f"{safe[:100]}__{digest}"
@@ -66,6 +69,8 @@ class AmbientProfileStore:
                     or payload.get("source") != config.source
                     or payload.get("device_name") != self.identity(config, device_name)["device_name"]
                     or payload.get("input_channel") != config.input_channel
+                    or payload.get("input_gain") != config.input_gain
+                    or payload.get("auto_gain_control") != config.auto_gain_control
                     or payload.get("sample_rate") != config.sample_rate
                     or payload.get("detection_profile") != config.detection_profile
                     or time.time() - updated > self.max_age_seconds):

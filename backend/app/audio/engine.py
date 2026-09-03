@@ -15,6 +15,7 @@ from ..detection.vad import SileroVADDetector
 from ..detection.noise_profile import AdaptiveNoiseProfile
 from ..detection.speech_detector import SpeechDetector
 from ..detection.ambient_profile_store import AmbientProfileStore
+from ..detection.audio_event_gate import AudioEventGate
 from ..recording.recorder import AudioRecorderEngine
 from ..recording.metadata import RecordingMetadata
 from ..config.settings import AppConfig, load_config
@@ -78,6 +79,7 @@ class MainAudioEngine:
         self.current_spectral_change = 0.0
         self.current_radio_activity = False
         self.current_radio_activity_score = 0.0
+        self.current_event_active = False
         self.ambient_learning = False
         self.ambient_learned_samples = 0
         self.current_speech_candidate = False
@@ -117,6 +119,11 @@ class MainAudioEngine:
             frame_ms=1024 * 1000 / self.config.sample_rate,
             profile=self.config.detection_profile,
         )
+        self.event_gate = AudioEventGate(
+            start_margin_db=self.config.noise_margin_db,
+            frame_ms=1024 * 1000 / self.config.sample_rate,
+            end_hold_ms=self.config.ambient_confirm_ms,
+        )
 
     def get_effective_detection_config(self):
         return {
@@ -148,28 +155,14 @@ class MainAudioEngine:
         )
 
     def _effective_confirmation(self, decision, speech_probability: float) -> bool:
-        """Use the cold-start threshold only to arm the first recording."""
-        self.cold_start_mode_active = bool(
-            self.ambient_learning and not self.ambient_profile_loaded
-        )
-        cold_start_trigger = bool(
-            self.cold_start_mode_active
-            and not self.recorder.is_recording
-            and decision.speech_confirmed
-            and speech_probability >= self.config.cold_start_vad_threshold
-        )
-        if not self.cold_start_mode_active or self.recorder.is_recording:
-            effective = bool(decision.speech_confirmed)
-        else:
-            effective = cold_start_trigger
-        if cold_start_trigger:
-            self.cold_start_voice_triggered = True
+        """A confirmed human voice is the sole recording authorization."""
+        self.cold_start_mode_active = bool(self.ambient_learning)
+        effective = bool(decision.speech_confirmed)
         self.cold_start_voice_active = self.cold_start_mode_active
         self.effective_speech_confirmed = effective
         self.ambient_learning_paused_for_voice = bool(
             self.ambient_learning and (
-                effective or self.recorder.is_recording
-                or decision.is_candidate or decision.radio_activity
+                decision.is_candidate or decision.speech_confirmed
             )
         )
         return effective
@@ -335,6 +328,7 @@ class MainAudioEngine:
         self.noise_profile = self._new_noise_profile()
         self.vad_detector.reset()
         self.speech_detector.reset()
+        self.event_gate.reset()
         self.ambient_learned_samples = 0
         self._ambient_device_name = getattr(self.source, "device_name", None) or self.config.device_name
         cached = self.ambient_profile_store.load(self.config, self._ambient_device_name)
@@ -460,12 +454,12 @@ class MainAudioEngine:
                     print(f"[AUDIO ENGINE] frames_received={self.frames_received} processing_rate={self.config.sample_rate} level={self.current_level_dbfs:.1f}")
                 if self.current_error == "No audio callback received for 2 seconds":
                     self.current_error = None
-                # Calibration accumulation (legacy API remains available).
-                if self._is_calibrating:
-                    self._calibration_levels.append(dbfs)
-
                 # 2. Compute Voice Activity Detection (Silero VAD)
                 speech_prob = self.vad_detector.get_speech_probability(chunk)
+                # Manual calibration, like startup learning, counts verified
+                # quiet audio rather than elapsed wall-clock time.
+                if self._is_calibrating and speech_prob < self.config.ambient_learning_vad_max:
+                    self._calibration_levels.append(dbfs)
                 self.current_speech_prob = round(speech_prob, 2)
                 if dbfs > -50 and speech_prob < .10:
                     self._vad_inactive_frames += 1
@@ -473,12 +467,17 @@ class MainAudioEngine:
                     self._vad_inactive_frames = 0
 
                 noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+                event = self.event_gate.process(dbfs, noise_metrics.noise_floor_dbfs)
+                self.current_event_active = event.event_active
                 decision = self.speech_detector.process(
                     speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
                     noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
                     noise_metrics.spectral_difference,
                 )
                 effective_speech_confirmed = self._effective_confirmation(decision, speech_prob)
+                if not event.event_active and not self.recorder.is_recording:
+                    effective_speech_confirmed = False
+                    self.effective_speech_confirmed = False
                 cold_start_voice = bool(
                     self.cold_start_mode_active and self.cold_start_voice_triggered
                 )
@@ -527,7 +526,8 @@ class MainAudioEngine:
                 status, voice_detected, is_recording = self.recorder.process_frame(
                     raw_chunk, self.current_level_dbfs, self.current_speech_prob,
                     speech_confirmed=effective_speech_confirmed,
-                    candidate=decision.is_candidate, radio_activity=decision.radio_activity,
+                    candidate=decision.is_candidate, event_active=event.event_active,
+                    radio_activity=decision.radio_activity,
                     confidence=decision.confidence,
                     metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
                              "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
@@ -541,15 +541,13 @@ class MainAudioEngine:
                              "radio_activity": decision.radio_activity,
                              "radio_activity_score": decision.radio_activity_score},
                     vad_backend=self.vad_detector.vad_backend,
-                    return_to_ambient=(noise_metrics.spectral_difference < self.config.ambient_return_spectral_threshold and
-                                       noise_metrics.broadband_snr_db < self.config.minimum_snr_db and
-                                       speech_prob < self.config.vad_stop_threshold and
-                                       not decision.radio_activity),
+                    return_to_ambient=(not event.event_active and
+                                       speech_prob < self.config.vad_stop_threshold),
                 )
                 self.ambient_learning_paused_for_voice = bool(
                     self.ambient_learning and (
                         effective_speech_confirmed or is_recording
-                        or decision.is_candidate or decision.radio_activity
+                        or decision.is_candidate
                     )
                 )
                 self.current_status = (("calibration_paused_recording_voice"
@@ -604,6 +602,10 @@ class MainAudioEngine:
             "noise_floor_dbfs": self.noise_floor_dbfs,
             "threshold_dbfs": self.config.threshold_dbfs,
             "dynamic_threshold_dbfs": self.current_dynamic_threshold,
+            "event_active": self.current_event_active,
+            "event_start_threshold_dbfs": self.noise_floor_dbfs + self.event_gate.start_margin_db,
+            "event_continue_threshold_dbfs": self.noise_floor_dbfs + self.event_gate.continue_margin_db,
+            "event_end_threshold_dbfs": self.noise_floor_dbfs + self.event_gate.end_margin_db,
             "snr_db": self.current_snr,
             "speech_band_snr_db": self.current_speech_band_snr,
             "spectral_change": self.current_spectral_change,
@@ -674,7 +676,7 @@ class MainAudioEngine:
         self.stop()
         return self.start()
 
-    def calibrate_noise_floor(self, duration_sec: float = 5.0) -> Dict[str, Any]:
+    def calibrate_noise_floor(self, duration_sec: float = 3.0) -> Dict[str, Any]:
         """
         Listens to ambient noise for duration_sec, calculates average noise floor dBFS,
         and returns recommended trigger threshold.
@@ -686,24 +688,38 @@ class MainAudioEngine:
         self._calibration_levels = []
         self._is_calibrating = True
 
-        time.sleep(duration_sec)
+        required = int(duration_sec * self.config.sample_rate)
+        deadline = time.monotonic() + max(duration_sec * 4, duration_sec + 5)
+        while (len(self._calibration_levels) * 1024 < required
+               and time.monotonic() < deadline):
+            time.sleep(.05)
 
         self._is_calibrating = False
         valid_samples = [x for x in self._calibration_levels if x > -95.0]
 
         if valid_samples:
-            noise_floor = float(np.mean(valid_samples))
+            values = np.asarray(valid_samples)
+            noise_floor = float(np.median(values))
+            mean = float(np.mean(values))
+            p90 = float(np.percentile(values, 90))
+            peak = float(np.max(values))
         else:
             noise_floor = -58.0
+            mean = p90 = peak = noise_floor
 
-        recommended = float(np.clip(noise_floor + 14.0, -55.0, -20.0))
+        recommended = float(np.clip(max(noise_floor + 8.0, p90 + 4.0), -90.0, 0.0))
 
         if not was_running:
             self.stop()
 
         return {
             "noise_floor_dbfs": round(noise_floor, 1),
+            "noise_mean_dbfs": round(mean, 1),
+            "noise_median_dbfs": round(noise_floor, 1),
+            "noise_p90_dbfs": round(p90, 1),
+            "noise_peak_dbfs": round(peak, 1),
             "recommended_threshold_dbfs": round(recommended, 1),
-            "margin_db": 14.0,
+            "margin_db": round(recommended - noise_floor, 1),
+            "quiet_seconds": round(len(valid_samples) * 1024 / self.config.sample_rate, 2),
             "sample_count": len(valid_samples),
         }

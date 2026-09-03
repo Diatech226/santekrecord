@@ -64,7 +64,7 @@ export const api = {
       trigger_mode: 'db_vad',
       threshold_dbfs: -38,
       vad_threshold: 0.6,
-      preroll_seconds: 1.0,
+      preroll_seconds: 1.5,
       silence_seconds: 2.0,
       auto_trim_silence: true,
       trim_margin_seconds: 0.2,

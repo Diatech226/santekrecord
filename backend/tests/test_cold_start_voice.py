@@ -50,10 +50,10 @@ def test_radio_room_cold_start_records_radio_voice(tmp_path):
     assert status == "communication_active" and voice and recording
 
 
-def test_cold_start_low_vad_does_not_trigger(tmp_path):
+def test_confirmed_voice_is_not_vetoed_by_separate_probability_argument(tmp_path):
     subject = engine(tmp_path)
     _status, _voice, recording = trigger_recorder(subject, probability=.25)
-    assert not recording and not subject.effective_speech_confirmed
+    assert recording and subject.effective_speech_confirmed
 
 
 def test_cold_start_trigger_then_lower_vad_keeps_speech(tmp_path):
@@ -61,7 +61,7 @@ def test_cold_start_trigger_then_lower_vad_keeps_speech(tmp_path):
     trigger_recorder(subject, probability=.90)
     assert subject.recorder.is_recording
     assert subject._effective_confirmation(decision(), .68)
-    assert subject.cold_start_voice_triggered
+    assert not subject.cold_start_voice_triggered  # legacy diagnostic only
 
 
 def test_cold_start_active_recording_uses_normal_speech_hysteresis(tmp_path):
@@ -71,9 +71,9 @@ def test_cold_start_active_recording_uses_normal_speech_hysteresis(tmp_path):
     assert not subject._effective_confirmation(decision(speech=False), .55)
 
 
-def test_cold_start_threshold_only_applies_before_recording(tmp_path):
+def test_cold_start_threshold_does_not_veto_confirmed_voice(tmp_path):
     subject = engine(tmp_path)
-    assert not subject._effective_confirmation(decision(), .60)
+    assert subject._effective_confirmation(decision(), .60)
     assert not subject.recorder.is_recording
     trigger_recorder(subject, probability=.90)
     assert subject._effective_confirmation(decision(), .60)
@@ -90,7 +90,7 @@ def test_radio_room_cold_start_does_not_require_high_vad_after_trigger(tmp_path)
 def test_cold_start_flags_reset_on_restart(tmp_path):
     subject = engine(tmp_path)
     trigger_recorder(subject)
-    assert subject.cold_start_voice_triggered
+    assert not subject.cold_start_voice_triggered
     subject.stop()
     assert not subject.cold_start_mode_active
     assert not subject.cold_start_voice_triggered
@@ -129,7 +129,7 @@ def test_cold_start_telemetry_distinguishes_mode_and_trigger(tmp_path):
     assert subject._effective_confirmation(decision(), .90)
     telemetry = subject.get_telemetry()
     assert telemetry["cold_start_mode_active"]
-    assert telemetry["cold_start_voice_triggered"]
+    assert not telemetry["cold_start_voice_triggered"]
     assert telemetry["cold_start_vad_threshold"] == .75
 
 
