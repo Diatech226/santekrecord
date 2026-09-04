@@ -3,7 +3,9 @@ import os
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
-CONFIG_PATH = os.environ.get("RECORDER_CONFIG_PATH", "config.json")
+CONFIG_PATH = os.environ.get("RECORDER_CONFIG_PATH", "data/config.json")
+DEFAULT_CONFIG_PATH = "config.default.json"
+LEGACY_CONFIG_PATH = "config.json"
 CURRENT_CONFIG_VERSION = 2
 
 
@@ -58,7 +60,7 @@ class AppConfig(BaseModel):
     speech_band_high_hz: float = Field(default=4000.0, ge=500.0)
     vad_start_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
     vad_stop_threshold: float = Field(default=0.30, ge=0.0, le=1.0)
-    minimum_speech_ms: int = Field(default=120, ge=50, le=2000)
+    minimum_speech_ms: int = Field(default=128, ge=128, le=2000)
     minimum_total_speech_ms: int = Field(default=300, ge=50, le=5000)
     transmission_hangover_seconds: float = Field(default=2.0, ge=.3, le=15.0)
     keep_internal_pause_ms: int = Field(default=1200, ge=0, le=5000)
@@ -83,31 +85,54 @@ class UnsupportedConfigVersionError(ValueError):
     """Raised when a configuration requires a newer SantekRecord schema."""
 
 
+def _read_config(path: str, *, legacy: bool = False) -> AppConfig:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    version = data.get("config_version", CURRENT_CONFIG_VERSION)
+    if version > CURRENT_CONFIG_VERSION:
+        raise UnsupportedConfigVersionError(
+            f"Configuration version {version} is newer than supported version "
+            f"{CURRENT_CONFIG_VERSION}. Please update SantekRecord."
+        )
+    # Version 2 shipped with 120 ms although 1024 samples at 16 kHz can only
+    # enforce 128 ms. Upgrade that historical product value during the one-time
+    # file relocation; every other user setting remains untouched.
+    if legacy and data.get("minimum_speech_ms") == 120:
+        data["minimum_speech_ms"] = 128
+    return AppConfig(**data)
+
+
 def load_config() -> AppConfig:
+    """Load the runtime config, seeding it once from legacy or product defaults."""
     if os.path.exists(CONFIG_PATH):
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                version = data.get("config_version", CURRENT_CONFIG_VERSION)
-                if version > CURRENT_CONFIG_VERSION:
-                    raise UnsupportedConfigVersionError(
-                        f"Configuration version {version} is newer than supported version "
-                        f"{CURRENT_CONFIG_VERSION}. Please update SantekRecord."
-                    )
-                return AppConfig(**data)
+            return _read_config(CONFIG_PATH)
         except UnsupportedConfigVersionError:
             # Never replace or downgrade a file written by a newer application.
             raise
         except Exception as e:
             print(f"[Config] Error loading {CONFIG_PATH}: {e}. Using defaults.")
+            # An existing user file is never replaced by product defaults.
+            return AppConfig()
     
-    config = AppConfig()
+    seed_path = LEGACY_CONFIG_PATH if os.path.exists(LEGACY_CONFIG_PATH) else DEFAULT_CONFIG_PATH
+    try:
+        config = (_read_config(seed_path, legacy=seed_path == LEGACY_CONFIG_PATH)
+                  if os.path.exists(seed_path) else AppConfig())
+    except UnsupportedConfigVersionError:
+        raise
+    except Exception as e:
+        print(f"[Config] Error loading {seed_path}: {e}. Using defaults.")
+        config = AppConfig()
     save_config(config)
     return config
 
 
 def save_config(config: AppConfig) -> AppConfig:
     try:
+        parent = os.path.dirname(CONFIG_PATH)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             f.write(config.model_dump_json(indent=2))
     except Exception as e:

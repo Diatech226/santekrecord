@@ -73,7 +73,7 @@ def test_parameter_sweep_exports_recommendation_without_live_mutation(tmp_path):
     path = tmp_path / "recommended_config.json"; result = tuner.run(4, path)
     assert result["trials"] == 4 and path.exists()
     assert base.model_dump() == original
-    assert "config.json was not modified" in path.read_text()
+    assert "data/config.json was not modified" in path.read_text()
 
 
 def test_offline_wav_replay_uses_sample_clock(tmp_path, monkeypatch):
@@ -83,7 +83,7 @@ def test_offline_wav_replay_uses_sample_clock(tmp_path, monkeypatch):
         wav.setparams((1, 2, rate, 0, "NONE", "not compressed")); wav.writeframes((audio*32767).astype("<i2").tobytes())
     monkeypatch.setattr("backend.app.evaluation.offline_replayer.SileroVADDetector.get_speech_probability",
                         lambda self, chunk: .99 if np.sqrt(np.mean(chunk**2)) > .1 else 0.)
-    config = AppConfig(ambient_learning_seconds=1, minimum_speech_ms=50, minimum_total_speech_ms=50,
+    config = AppConfig(ambient_learning_seconds=1, minimum_speech_ms=128, minimum_total_speech_ms=50,
                        communication_end_timeout_seconds=.5, transmission_end_timeout_seconds=.2,
                        ambient_confirm_ms=20, auto_trim_silence=False)
     result = OfflineAudioReplayer(config).replay(path)

@@ -49,7 +49,7 @@ santekrecord/
 │   │   │   ├── recorder.py      # Buffer circulaire & écriture WAV
 │   │   │   └── metadata.py      # Génération JSON des métadonnées
 │   │   └── config/
-│   │       └── settings.py      # Persistance config.json
+│   │       └── settings.py      # Persistance data/config.json
 │   └── requirements.txt
 ├── src/
 │   ├── components/              # Composants React modulaires
@@ -57,6 +57,8 @@ santekrecord/
 │   ├── types/                   # Interfaces TypeScript
 │   └── App.tsx                  # Interface principale minimaliste
 ├── recordings/                  # Dossier de stockage des WAV + JSON
+├── config.default.json          # Configuration produit versionnée
+├── data/config.json             # Configuration utilisateur locale (ignorée par Git)
 ├── server.ts                    # Serveur intégré Node/Express/Vite
 ├── start_kali.sh                # Script de lancement tout-en-un pour Kali
 ├── package.json
@@ -272,7 +274,7 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 - `GET /api/audio/diagnostics` : PortAudio, périphérique/rates, frames et dernier callback
 - `GET /api/audio/instruments` : présence réellement sondée des entrées, de GNU Radio, du FIFO et du HackRF
 - `GET /api/settings` : Récupère la configuration actuelle
-- `PUT /api/settings` : Sauvegarde la configuration dans `config.json`
+- `PUT /api/settings` : Sauvegarde la configuration dans `data/config.json`
 - `POST /api/monitor/start` : Démarre la surveillance audio continue
 - `POST /api/monitor/stop` : Arrête la surveillance
 - `POST /api/calibrate` : accumule 3 secondes de bruit ambiant vérifié et recommande la marge du gate RAW
@@ -296,7 +298,7 @@ Pour les sources acoustiques `microphone` et `usb`, le profil par défaut sépar
 
 Au démarrage de la surveillance, l'état `LEARNING_AMBIENT` accumule 3 secondes d'audio calme vérifié (VAD bas, aucun candidat vocal, aucune voix confirmée et aucun enregistrement). En écoute, le profil borné à 20 secondes ne se met à jour que si la probabilité de parole est inférieure à 0,15, hors candidat et hors enregistrement. Le seuil dynamique vaut par défaut `noise_floor_dbfs + 8 dB` et la décision combine Silero/fallback acoustique, SNR large bande, SNR 250–4000 Hz et changement spectral.
 
-Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmée pendant au moins 120 ms démarre une transmission avec 1,5 s de pré-roll. L'hystérésis VAD (0,50 / 0,30) et un hangover de 2 secondes réunissent les phrases séparées par des pauses. À la finalisation, le masque vocal enlève uniquement les bords inutiles avec 200 ms de marge ; les pauses internes restent intactes. Un événement contenant moins de 300 ms de parole est abandonné.
+Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmée pendant au moins 128 ms démarre une transmission avec 1,5 s de pré-roll. L'hystérésis VAD (0,50 / 0,30) et un hangover de 2 secondes réunissent les phrases séparées par des pauses. À la finalisation, le masque vocal enlève uniquement les bords inutiles avec 200 ms de marge ; les pauses internes restent intactes. Un événement contenant moins de 300 ms de parole est abandonné.
 
 ### Paramètres par défaut importants
 
@@ -312,17 +314,34 @@ Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmé
 | `minimum_snr_db` | `6.0` (référence de confiance/diagnostic, jamais un veto REC) |
 | `speech_band_low_hz` / `speech_band_high_hz` | `250` / `4000` |
 | `vad_start_threshold` / `vad_stop_threshold` | `0.50` / `0.30` |
-| `minimum_speech_ms` / `minimum_total_speech_ms` | `120` / `300` |
+| `minimum_speech_ms` / `minimum_total_speech_ms` | `128` / `300` |
 | `preroll_seconds` | `1.5` |
 | `transmission_hangover_seconds` | `2.0` |
 | `trim_margin_seconds` | `0.2` |
 | `input_gain` / `auto_gain_control` | `1.0` / `false` |
 | `input_channel` | `auto` |
 
-`config.json` et `AppConfig` définissent directement le schéma canonique neuf de
-version 2. Il n'existe aucune migration legacy. Une version supérieure est
-refusée explicitement, sans réécriture du fichier, afin d'exiger la mise à jour
-de SantekRecord.
+`config.default.json` est la configuration produit canonique versionnée et ses
+valeurs correspondent aux defaults de `AppConfig`. `data/config.json` est la
+configuration utilisateur locale : elle contient notamment le périphérique et
+son identité ALSA, le gain, le canal, la fréquence et la station. **Ne commitez
+pas `data/config.json`.** Au premier lancement, elle est créée depuis les
+defaults. Si un ancien `config.json` existe, il est validé puis migré à la place,
+une seule fois. Une configuration runtime existante est toujours conservée lors
+d'un `git pull`; les nouveaux defaults complètent seulement les champs absents
+via Pydantic. `RECORDER_CONFIG_PATH` permet de choisir un autre fichier runtime.
+
+La confirmation est évaluée par trames de traitement : `frame_ms = 1024 × 1000 /
+sample_rate`. À 16 kHz une trame dure 64 ms. Le nombre exigé est
+`max(2, ceil(minimum_speech_ms / frame_ms))`; le défaut 128 ms représente donc
+exactement deux trames, tandis que 129 ms en exige trois. La durée totale minimale
+de conservation reste indépendamment fixée à 300 ms.
+
+Test terrain : après `git pull`, démarrer l'application, sélectionner USB Audio
+CODEC, changer le gain, arrêter puis redémarrer. Le même périphérique et les mêmes
+réglages doivent être restaurés depuis `data/config.json`, et `git status --short`
+doit rester vide. De même, une mise à jour de `config.default.json` ne doit jamais
+écraser un `data/config.json` local existant.
 
 Au démarrage, RAW AMBIENT reste `LEARNING` (valeur `null`) jusqu'à huit trames
 calmes consécutives et stables (environ 0,5 s). Une candidature vocale, un VAD

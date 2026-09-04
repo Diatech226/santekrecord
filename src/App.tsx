@@ -38,7 +38,7 @@ export default function App() {
     silence_seconds: 2.0,
     input_gain: 1.0,
     auto_gain_control: false,
-    // Bootstrap values mirror config.json only until the backend response arrives.
+    // Bootstrap values mirror config.default.json only until the backend response arrives.
     detection_profile: 'voice_any_source',
     adaptive_noise: true,
     adaptive_threshold: true,
@@ -51,7 +51,7 @@ export default function App() {
     speech_band_high_hz: 4000,
     vad_start_threshold: .50,
     vad_stop_threshold: .30,
-    minimum_speech_ms: 120,
+    minimum_speech_ms: 128,
     minimum_total_speech_ms: 300,
     transmission_hangover_seconds: 2,
     keep_internal_pause_ms: 1200,

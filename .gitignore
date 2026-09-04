@@ -16,5 +16,17 @@ evaluation_results/*
 
 __pycache__/
 *.py[cod]
-data/ambient_profiles/*.json
-data/ambient_profiles/*.npz
+# Runtime user configuration
+data/config.json
+
+# Captured recordings
+recordings/*
+!recordings/.gitkeep
+
+# VAD debug audio
+data/debug/*
+!data/debug/.gitkeep
+
+# Ambient runtime profiles
+data/ambient_profiles/*
+!data/ambient_profiles/.gitkeep

@@ -79,7 +79,7 @@ export const api = {
       minimum_snr_db: 6,
       vad_start_threshold: 0.50,
       vad_stop_threshold: 0.30,
-      minimum_speech_ms: 120,
+      minimum_speech_ms: 128,
       minimum_total_speech_ms: 300,
       frequency_hz: 145000000,
       modulation: 'NFM',

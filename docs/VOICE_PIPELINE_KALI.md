@@ -117,3 +117,19 @@ Also press **Stop** at several reconnect stages and confirm no stream reopens.
 Automatic reconnect scans every 1.5 seconds for up to 45 seconds. If it times
 out, confirm `reconnect_failed`, monitor requested false, and engine running
 false before using **Retry**.
+
+## Runtime configuration
+
+User and device settings are persisted in `data/config.json` (not in the
+versioned `config.default.json`). Inspect the active values with:
+
+```bash
+cat data/config.json
+```
+
+For the canonical 16 kHz pipeline, verify `vad_start_threshold` is `0.5`,
+`vad_stop_threshold` is `0.3`, and `minimum_speech_ms` is `128`. After selecting
+the USB device and changing gain, restart the application and confirm the same
+device, ALSA identity, channel, and gain remain present. A subsequent `git pull`
+may update product defaults but must not replace this runtime file; normal use
+must leave `git status --short` clean.

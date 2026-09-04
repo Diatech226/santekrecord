@@ -1,4 +1,5 @@
 """Profile-driven speech decisions with hysteresis and diagnostics."""
+import math
 from collections import deque
 from dataclasses import dataclass
 
@@ -57,14 +58,16 @@ PROFILES = {profile.name: profile for profile in (VOICE_ANY_SOURCE, RADIO_ROOM)}
 
 class SpeechDetector:
     def __init__(self, vad_start_threshold=.50, vad_continue_threshold=.30,
-                 minimum_snr_db=6.0, minimum_speech_ms=120, frame_ms=64,
+                 minimum_snr_db=6.0, minimum_speech_ms=128, frame_ms=64,
                  profile="voice_any_source"):
         self.profile = PROFILES.get(profile, VOICE_ANY_SOURCE)
         self.start = vad_start_threshold
         self.continue_ = vad_continue_threshold
         self.minimum_snr = minimum_snr_db
         self.minimum_speech_ms = minimum_speech_ms
-        self.required = max(2, int(round(minimum_speech_ms / frame_ms)))
+        self.frame_ms = frame_ms
+        self.required = max(2, math.ceil(minimum_speech_ms / frame_ms))
+        self.effective_minimum_speech_ms = self.required * frame_ms
         self.hits = deque(maxlen=self.required)
         self.active = False
 
