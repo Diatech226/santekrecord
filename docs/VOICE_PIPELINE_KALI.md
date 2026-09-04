@@ -86,32 +86,31 @@ seconds of the post-resampling/post-gain mono signal presented to the VAD is
 written to `data/debug/vad_input.wav`; its path, duration, 16 kHz sample rate,
 RMS, and peak are logged. The dump is disabled by default and is separate from
 normal archived recordings.
-# USB AUDIO HOT-PLUG / RECONNECT
+## USB hot-plug field validation
 
-1. Start monitoring.
-2. Speak and verify that REC works.
-3. Unplug the USB sound card.
-4. Observe `DEVICE DISCONNECTED` then `RECONNECTING` in the UI.
-5. Plug the same card back in.
-6. In diagnostics, verify that `resolved_device_id` follows the new PortAudio ID.
-7. Verify that `LISTENING` resumes automatically.
-8. Speak again and verify that REC works.
+1. Select **USB Audio CODEC** and press **Start**.
+2. Speak and confirm `VOICE → SPEECH → REC`.
+3. Unplug the USB device.
+4. Confirm the configured device remains visible in diagnostics.
+5. Confirm the resolved device and ID become `None` / `—`.
+6. Confirm `RECONNECTING`, unavailable, and engine not running are reported.
+7. Confirm no built-in, default, or other USB microphone is selected.
+8. Plug the same USB device back in.
+9. Confirm its ALSA `card_id` resolves it even if its `hw` card number changed.
+10. Confirm diagnostics show the new resolved PortAudio ID.
+11. Confirm `LISTENING` resumes automatically.
+12. Speak again and confirm `VOICE → SPEECH → REC`.
 
-The refresh button and device selector become available as soon as telemetry says
-`engine_running=false`. Automatic reconnect scans every 1.5 seconds for up to 45
-seconds and matches the configured identity/name or ALSA `card_id`; it does not
-choose another microphone merely because the old numeric index was reused.
-# USB hot-plug field validation
+Capture ALSA and PortAudio enumeration before unplugging and after hot-plug:
 
-1. Run `git pull`, then `./start_kali.sh`.
-2. Select **USB Audio CODEC**, start monitoring, and confirm speaking reaches
-   `SPEECH` / `REC`.
-3. Unplug the device. Confirm **DISCONNECTED**, **RECONNECTING**, and **STOP
-   SURVEILLANCE** remain visible. Confirm neither the built-in microphone nor
-   another USB input is selected.
-4. Reconnect the same card. Its PortAudio id may change; confirm the resolved id
-   updates and **LISTENING** resumes, then confirm speech reaches `SPEECH` / `REC`
-   again.
-5. Repeat while leaving the card unplugged for the full timeout. Confirm
-   `reconnect_failed`, with monitor requested and engine running both false, then
-   use **RETRY**.
+```bash
+arecord -l
+python -c "import sounddevice as sd; print(sd.query_devices())"
+```
+
+A rename such as `hw:2,0 → hw:3,0` is expected. SantekRecord must recognize the
+same physical card through `alsa_card_id` and must not substitute another input.
+Also press **Stop** at several reconnect stages and confirm no stream reopens.
+Automatic reconnect scans every 1.5 seconds for up to 45 seconds. If it times
+out, confirm `reconnect_failed`, monitor requested false, and engine running
+false before using **Retry**.

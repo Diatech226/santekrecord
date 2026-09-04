@@ -78,6 +78,7 @@ def test_monitor_restart_resets_vad(monkeypatch, tmp_path):
         def stop(self): self.is_active = False
         def read_chunk(self, chunk_size=1024): return None
     monkeypatch.setattr(engine, "_create_source", Source)
+    monkeypatch.setattr(engine, "_resolve_capture_device", lambda: None)
     engine.vad_detector._recent.append(.9)
     assert engine.start()
     engine.stop()

@@ -65,6 +65,7 @@ class MainAudioEngine:
         self.device_identity_match = False
         self._reconnect_identity: Optional[AudioDeviceIdentity] = None
         self._reconnect_device_id: Optional[int] = None
+        self._monitor_generation = 0
         self._capture_lock = threading.RLock()
 
         # Metrics for monitoring
@@ -406,13 +407,20 @@ class MainAudioEngine:
 
     def start(self) -> bool:
         with self._capture_lock:
+            if not self._monitor_requested:
+                self._monitor_generation += 1
+            self._monitor_requested = True
             return self._start_locked()
 
-    def _start_locked(self) -> bool:
+    def _start_locked(self, *, from_reconnect: bool = False,
+                      generation: Optional[int] = None) -> bool:
+        if from_reconnect and (
+            not self._monitor_requested or generation != self._monitor_generation
+        ):
+            return False
         if self._is_running:
             return True
 
-        self._monitor_requested = True
         self._reset_detection_state()
         self.current_error = None
         self.current_status = "opening"
@@ -450,7 +458,7 @@ class MainAudioEngine:
             self._is_running = False
             self.current_error = f"Audio source error: {e}"
             self.current_status = "error"
-            if not self.device_reconnecting:
+            if not from_reconnect:
                 self._monitor_requested = False
             print(f"[MainAudioEngine] Start failed: {e}")
             return False
@@ -488,6 +496,7 @@ class MainAudioEngine:
     def stop(self) -> None:
         with self._capture_lock:
             self._monitor_requested = False
+            self._monitor_generation += 1
             self._is_running = False
             # Snapshot under the transition lock. Closing then unblocks a worker
             # waiting in read_chunk and promptly releases ALSA.
@@ -529,6 +538,10 @@ class MainAudioEngine:
             self._is_running = False
             self._reconnect_identity = self._configured_identity()
             self._reconnect_device_id = self.resolved_device_id or self.config.device_id
+            self.resolved_device_id = None
+            self.resolved_device_name = None
+            self.device_identity_match = False
+            generation = self._monitor_generation
         if self.source is not None:
             try:
                 self.source.stop()
@@ -538,30 +551,38 @@ class MainAudioEngine:
         self.recorder.stop_and_flush()
         self.current_voice_detected = False
         self._broadcast(self.get_telemetry())
-        if self._monitor_requested and not (self._reconnect_thread and self._reconnect_thread.is_alive()):
-            self._reconnect_thread = threading.Thread(target=self._reconnect_loop, daemon=True)
-            self._reconnect_thread.start()
+        with self._capture_lock:
+            if (self._monitor_requested
+                    and not (self._reconnect_thread and self._reconnect_thread.is_alive())):
+                self._reconnect_thread = threading.Thread(
+                    target=self._reconnect_loop, args=(generation,), daemon=True)
+                self._reconnect_thread.start()
 
-    def _reconnect_loop(self) -> None:
+    def _reconnect_loop(self, generation: Optional[int] = None) -> None:
+        if generation is None:
+            generation = self._monitor_generation
         self.device_reconnecting = True
         self.reconnect_attempt = 0
         self.reconnect_started_at = time.time()
         deadline = time.monotonic() + 45.0
-        while self._monitor_requested and time.monotonic() < deadline:
+        while (self._monitor_requested and generation == self._monitor_generation
+               and time.monotonic() < deadline):
             self.reconnect_attempt += 1
             self.current_status = "reconnecting"
             self._broadcast(self.get_telemetry())
             time.sleep(1.5)
-            if not self._monitor_requested:
-                break
-            # start() freshly resolves the same persisted identity before opening.
-            if self.start():
+            # The intent/generation check and source open share the capture lock.
+            with self._capture_lock:
+                if not self._monitor_requested or generation != self._monitor_generation:
+                    break
+                started = self._start_locked(from_reconnect=True, generation=generation)
+            if started:
                 self.current_error = None
                 self.device_reconnecting = False
                 self._broadcast(self.get_telemetry())
                 return
         self.device_reconnecting = False
-        if self._monitor_requested:
+        if self._monitor_requested and generation == self._monitor_generation:
             self._monitor_requested = False
             self.current_status = "reconnect_failed"
             self.current_error = "device_reconnect_timeout"
@@ -847,9 +868,10 @@ class MainAudioEngine:
             ),
             "device_reconnecting": self.device_reconnecting,
             "selected_device_available": bool(
-                self.config.source == "gnuradio" or
-                (self.resolved_device_id is not None and self.current_status not in
-                 ("device_disconnected", "reconnecting", "reconnect_failed"))
+                self._is_running and (
+                    self.config.source == "gnuradio" or
+                    (self.resolved_device_id is not None and self.device_identity_match)
+                )
             ),
             "reconnect_attempt": self.reconnect_attempt,
             "reconnect_elapsed_seconds": (round(now - self.reconnect_started_at, 1)
