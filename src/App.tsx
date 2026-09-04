@@ -8,7 +8,7 @@ import {
   RecordingMeta,
 } from './types';
 import { api } from './services/api';
-import { reconcileSelectedDevice } from './services/deviceReconciliation';
+import { getEngineDisplayState, reconcileSelectedDevice } from './services/deviceReconciliation';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AudioMeter } from './components/AudioMeter';
 import { SourceSelector } from './components/SourceSelector';
@@ -67,6 +67,8 @@ export default function App() {
   const [deviceReconnecting, setDeviceReconnecting] = useState(false);
   const [reconnectedMessage, setReconnectedMessage] = useState<string | null>(null);
   const isMonitoring = engineRunning;
+  const engineDisplayState = getEngineDisplayState(deviceReconnecting, engineRunning, monitorRequested);
+  const captureOpening = deviceReconnecting || (monitorRequested && !engineRunning);
   const [status, setStatus] = useState<EngineStatus>('idle');
   const [durationSec, setDurationSec] = useState(0);
   const [levelDbfs, setLevelDbfs] = useState(-90);
@@ -300,6 +302,7 @@ export default function App() {
 
   // Run calibration
   const runCalibration = async () => {
+    if (captureOpening) throw new Error('Calibration unavailable while the audio device is opening');
     const result = await api.calibrateNoise();
     localStorage.setItem(`audio_calibration:${settings.device_id ?? settings.device_name}`, JSON.stringify(result));
     return result;
@@ -371,9 +374,28 @@ export default function App() {
     else if (deviceReconnecting) await handleRefreshDevices();
   };
 
+  const applyManualDeviceOverride = async (partial: Partial<AppSettings>) => {
+    const resume = monitorRequested;
+    if (resume) {
+      await api.stopMonitoring();
+      setMonitorRequested(false);
+      setEngineRunning(false);
+      setDeviceReconnecting(false);
+    }
+    const updated = { ...settings, ...partial };
+    setSettings(updated);
+    await api.saveSettings(updated);
+    if (resume) {
+      setMonitorRequested(true);
+      setStatus('opening');
+      await api.startMonitoring(updated);
+      connectMonitorSocket();
+    }
+  };
+
   const handleSourceChange = (source: AudioSourceType) => {
     if (source === 'gnuradio') {
-      void handleUpdateSettings({ source });
+      void applyManualDeviceOverride({ source });
       return;
     }
 
@@ -401,7 +423,7 @@ export default function App() {
       ?? pool[0];
 
     // Persist source and device together.
-    void handleUpdateSettings({
+    void applyManualDeviceOverride({
       source,
       device_id: selectedDevice?.id ?? null,
       device_name: selectedDevice?.name,
@@ -459,16 +481,18 @@ export default function App() {
             <div className="flex items-center gap-1.5">
               <span
                 style={
-                  isMonitoring
+                  engineDisplayState === 'active'
                     ? {
                         backgroundColor: accentColor,
                         boxShadow: `0 0 4px ${accentColor}`,
                       }
                     : undefined
                 }
-                className={`w-1.5 h-1.5 rounded-full ${!isMonitoring ? 'bg-[#404040]' : ''}`}
+                className={`w-1.5 h-1.5 rounded-full ${engineDisplayState !== 'active' ? 'bg-[#404040]' : ''}`}
               />
-              <span>{t.engine} {isMonitoring ? t.engineActive : t.engineReady}</span>
+              <span>{t.engine} {engineDisplayState === 'reconnecting' ? 'RECONNECTING'
+                : engineDisplayState === 'active' ? t.engineActive
+                : engineDisplayState === 'waiting' ? 'STARTING / WAITING' : t.engineReady}</span>
             </div>
 
             {/* Theme Toggle & Diagnostics Toolbar */}
@@ -625,7 +649,7 @@ export default function App() {
                 onSourceChange={handleSourceChange}
                 onDeviceChange={(devId: string | number) => {
                   const dev = devices.find((d) => String(d.id) === String(devId));
-                  handleUpdateSettings({
+                  void applyManualDeviceOverride({
                     device_id: Number(devId), device_name: dev?.name,
                     device_hostapi: dev?.hostapi,
                     device_max_input_channels: dev?.max_input_channels,
@@ -637,7 +661,8 @@ export default function App() {
               />
               {settings.source !== 'gnuradio' && (
                 <div className="mt-3 space-y-2">
-                  <button type="button" onClick={testInput} disabled={isTestingInput || isMonitoring}
+                  <button type="button" onClick={testInput}
+                    disabled={isTestingInput || monitorRequested || deviceReconnecting}
                     className="w-full py-2 border border-[#2A2B2F] rounded text-[10px] uppercase text-[#00F0FF] disabled:opacity-50">
                     {isTestingInput ? 'Testing input (3s)…' : 'Test Input'}
                   </button>
@@ -674,6 +699,7 @@ export default function App() {
                         <dt>Effective SNR</dt><dd>{telemetry.effective_minimum_snr_db ?? '—'} dB</dd>
                       </dl>
                       <button type="button" className="mt-3 w-full py-1 border border-[#00F0FF]/40 text-[#00F0FF] uppercase"
+                        disabled={captureOpening}
                         onClick={async () => {
                           try {
                             const update = await api.resetAmbientProfile();
@@ -695,7 +721,7 @@ export default function App() {
             <div className="p-4 bg-[#111215] border border-[#1A1B1F] rounded-lg">
               <SettingsPanel
                 settings={settings}
-                disabled={false}
+                disabled={captureOpening}
                 ambientNoiseDbfs={ambientNoiseDbfs}
                 effectiveGain={effectiveGain}
                 onUpdateSettings={handleUpdateSettings}
@@ -736,7 +762,8 @@ export default function App() {
                 id="btn-trigger-calibration-main"
                 type="button"
                 onClick={() => setIsCalibModalOpen(true)}
-                className="w-full py-2.5 px-4 border border-[#2A2B2F] hover:border-[#00F0FF] text-[#A0A0A0] hover:text-[#00F0FF] bg-[#111215] font-mono text-[11px] uppercase tracking-wider rounded transition-colors flex items-center justify-center gap-2"
+                disabled={captureOpening}
+                className="w-full py-2.5 px-4 border border-[#2A2B2F] hover:border-[#00F0FF] text-[#A0A0A0] hover:text-[#00F0FF] bg-[#111215] font-mono text-[11px] uppercase tracking-wider rounded transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:pointer-events-none"
                 style={{
                   borderColor: '#2A2B2F',
                 }}

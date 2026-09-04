@@ -432,9 +432,13 @@ def reset_ambient_profile(engine=Depends(get_engine)):
 @router.post("/audio/test")
 def test_input(device_id: Optional[int | str] = None, source_type: str = "microphone", engine=Depends(get_engine)):
     """Open the selected hardware independently and report real samples for 3 seconds."""
-    if engine._is_running:
+    if engine._monitor_requested or engine.device_reconnecting:
         telemetry = engine.get_telemetry()
-        return {"working": telemetry["audio_frames_received"], **telemetry}
+        if engine._is_running:
+            return {"working": telemetry["audio_frames_received"], **telemetry}
+        return JSONResponse(status_code=409, content={
+            "working": False, "error": "Audio monitor is opening or reconnecting", **telemetry,
+        })
     if source_type == "gnuradio":
         from ..audio.gnuradio import GNURadioSource
         source = GNURadioSource(engine.config.fifo_path, engine.config.sample_rate)
@@ -535,6 +539,10 @@ def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
 
 @router.post("/calibrate")
 def calibrate_noise(engine=Depends(get_engine)):
+    if engine.device_reconnecting or (engine._monitor_requested and not engine._is_running):
+        return JSONResponse(status_code=409, content={
+            "error": "Calibration unavailable while the audio device is opening or reconnecting"
+        })
     result = engine.calibrate_noise_floor(duration_sec=3.0)
     return result
 
