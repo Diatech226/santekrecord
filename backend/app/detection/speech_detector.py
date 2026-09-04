@@ -25,7 +25,6 @@ class SpeechDecision:
 @dataclass(frozen=True)
 class DetectionProfile:
     name: str
-    high_vad_override: float
     use_radio_features: bool
 
     def candidate(self, probability, vad_limit, snr_db, minimum_snr,
@@ -51,22 +50,16 @@ class DetectionProfile:
         return max(0.0, min(1.0, .65 * signature + .20 * band + .15 * snr))
 
 
-VOICE_ANY_SOURCE = DetectionProfile("voice_any_source", .80, False)
-RADIO_ROOM = DetectionProfile("radio_room", .80, True)
+VOICE_ANY_SOURCE = DetectionProfile("voice_any_source", False)
+RADIO_ROOM = DetectionProfile("radio_room", True)
 PROFILES = {profile.name: profile for profile in (VOICE_ANY_SOURCE, RADIO_ROOM)}
 
 
 class SpeechDetector:
-    def __init__(self, vad_start_threshold=.65, vad_continue_threshold=.35,
-                 minimum_snr_db=6.0, minimum_speech_ms=160, frame_ms=64,
+    def __init__(self, vad_start_threshold=.50, vad_continue_threshold=.30,
+                 minimum_snr_db=6.0, minimum_speech_ms=120, frame_ms=64,
                  profile="voice_any_source"):
         self.profile = PROFILES.get(profile, VOICE_ANY_SOURCE)
-        # Both current profiles use conversation-friendly effective limits.
-        if self.profile in (VOICE_ANY_SOURCE, RADIO_ROOM):
-            vad_start_threshold = min(vad_start_threshold, .50)
-            vad_continue_threshold = min(vad_continue_threshold, .30)
-            minimum_snr_db = min(minimum_snr_db, 3.0)
-            minimum_speech_ms = min(minimum_speech_ms, 120)
         self.start = vad_start_threshold
         self.continue_ = vad_continue_threshold
         self.minimum_snr = minimum_snr_db

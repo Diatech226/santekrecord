@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -23,9 +24,9 @@ def test_product_defaults_are_canonical():
         "ambient_learning_seconds": 3.0,
         "ambient_learning_vad_max": 0.15,
         "noise_margin_db": 8.0,
-        "vad_start_threshold": 0.65,
-        "vad_stop_threshold": 0.35,
-        "minimum_speech_ms": 160,
+        "vad_start_threshold": 0.50,
+        "vad_stop_threshold": 0.30,
+        "minimum_speech_ms": 120,
         "minimum_total_speech_ms": 300,
         "minimum_snr_db": 6.0,
         "input_gain": 1.0,
@@ -35,6 +36,21 @@ def test_product_defaults_are_canonical():
     assert all(getattr(config, key) == value for key, value in expected.items())
     repository_config = json.loads(settings.CONFIG_PATH and open("config.json", encoding="utf-8").read())
     assert all(repository_config[key] == value for key, value in expected.items())
+
+
+def test_frontend_bootstrap_detection_defaults_match_canonical_config():
+    expected = {
+        "vad_start_threshold": 0.50,
+        "vad_stop_threshold": 0.30,
+        "minimum_speech_ms": 120,
+        "minimum_snr_db": 6.0,
+    }
+    for path in ("src/App.tsx", "src/services/api.ts"):
+        source = open(path, encoding="utf-8").read()
+        for key, value in expected.items():
+            match = re.search(rf"{key}:\s*([0-9.]+)", source)
+            assert match, f"{key} bootstrap default missing from {path}"
+            assert float(match.group(1)) == value
 
 
 def test_future_config_version_is_rejected_cleanly(tmp_path, monkeypatch):

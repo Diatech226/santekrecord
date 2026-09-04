@@ -84,6 +84,18 @@ def test_profile_switch_does_not_change_voice_authorization():
     assert decide("radio_room", .72, 4).speech_confirmed
 
 
+def test_speech_detector_honors_configured_thresholds_exactly():
+    higher = SpeechDetector(vad_start_threshold=.70, vad_continue_threshold=.45,
+                            minimum_snr_db=11, minimum_speech_ms=275)
+    lower = SpeechDetector(vad_start_threshold=.40, vad_continue_threshold=.20,
+                           minimum_snr_db=2, minimum_speech_ms=80)
+
+    assert (higher.start, higher.continue_, higher.minimum_snr,
+            higher.minimum_speech_ms) == (.70, .45, 11, 275)
+    assert (lower.start, lower.continue_, lower.minimum_snr,
+            lower.minimum_speech_ms) == (.40, .20, 2, 80)
+
+
 def radio_decision(vad, snr, band_snr, spectral_change, frames=3):
     detector = SpeechDetector(.65, .35, 6, 160, 64, profile="radio_room")
     return [detector.process(vad, -35, -55, snr, band_snr, spectral_change)

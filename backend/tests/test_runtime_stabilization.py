@@ -48,6 +48,16 @@ def test_vad_threshold_change_is_effective_after_save(tmp_path):
     assert effective["effective_vad_stop_threshold"] == .21
 
 
+def test_configured_detection_values_equal_effective_values(tmp_path):
+    engine = MainAudioEngine(config(vad_start_threshold=.70, vad_stop_threshold=.44,
+                                    minimum_snr_db=9, minimum_speech_ms=275),
+                             ambient_profiles_dir=tmp_path)
+    effective = engine.get_effective_detection_config()
+    for field in ("vad_start_threshold", "vad_stop_threshold", "minimum_snr_db",
+                  "minimum_speech_ms"):
+        assert effective[f"configured_{field}"] == effective[f"effective_{field}"]
+
+
 def test_vad_reset_clears_pending():
     vad = SileroVADDetector()
     vad._pending = np.ones(12, np.float32)

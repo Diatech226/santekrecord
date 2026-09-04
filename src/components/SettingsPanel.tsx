@@ -58,10 +58,10 @@ export const SettingsPanel: React.FC<Props> = ({
             <summary className="cursor-pointer text-[#00F0FF] uppercase">Advanced VAD thresholds</summary>
             <div className="grid grid-cols-2 gap-2 mt-2">
               {([
-                ['VAD Start', 'vad_start_threshold', settings.vad_start_threshold ?? .65, 0, 1, .05],
-                ['VAD Continue', 'vad_stop_threshold', settings.vad_stop_threshold ?? .35, 0, 1, .05],
-                ['Minimum SNR', 'minimum_snr_db', settings.minimum_snr_db ?? 6, 0, 20, 1],
-                ['Minimum Speech', 'minimum_speech_ms', settings.minimum_speech_ms ?? 160, 40, 1000, 20],
+                ['VAD Start', 'vad_start_threshold', settings.vad_start_threshold ?? .50, 0, 1, .05],
+                ['VAD Continue', 'vad_stop_threshold', settings.vad_stop_threshold ?? .30, 0, 1, .05],
+                ['SNR Confidence Reference', 'minimum_snr_db', settings.minimum_snr_db ?? 6, 0, 20, 1],
+                ['Minimum Speech', 'minimum_speech_ms', settings.minimum_speech_ms ?? 120, 40, 1000, 20],
               ] as const).map(([label, key, value, min, max, step]) => <label key={key} className="space-y-1">
                 <span className="flex justify-between text-[#A0A0A0]"><b>{label}</b><em>{value}{key.endsWith('_ms') ? ' ms' : key.includes('snr') ? ' dB' : ''}</em></span>
                 <input type="range" min={min} max={max} step={step} disabled={disabled} value={value}
