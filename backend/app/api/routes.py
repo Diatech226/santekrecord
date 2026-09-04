@@ -46,6 +46,11 @@ class InputTestRequest(BaseModel):
     duration_seconds: float = 2.5
 
 
+def capture_open_conflict(engine) -> bool:
+    """Return whether an independent capture would race the monitor lifecycle."""
+    return bool(engine._is_running or engine._monitor_requested or engine.device_reconnecting)
+
+
 @router.get("/audio/diagnostics")
 def audio_diagnostics(engine=Depends(get_engine)):
     devices = MicrophoneSource.list_devices()
@@ -432,7 +437,7 @@ def reset_ambient_profile(engine=Depends(get_engine)):
 @router.post("/audio/test")
 def test_input(device_id: Optional[int | str] = None, source_type: str = "microphone", engine=Depends(get_engine)):
     """Open the selected hardware independently and report real samples for 3 seconds."""
-    if engine._monitor_requested or engine.device_reconnecting:
+    if capture_open_conflict(engine):
         telemetry = engine.get_telemetry()
         if engine._is_running:
             return {"working": telemetry["audio_frames_received"], **telemetry}
@@ -474,8 +479,8 @@ def test_input(device_id: Optional[int | str] = None, source_type: str = "microp
 @router.post("/audio/test-input")
 def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
     """Capture a selected real PortAudio input and return measurable signal data."""
-    if engine._is_running:
-        raise HTTPException(status_code=409, detail="Stop monitoring before testing an input")
+    if capture_open_conflict(engine):
+        raise HTTPException(status_code=409, detail="Audio monitor is opening or reconnecting")
     requested_id = request.device_id
     # A browser may still hold the pre-hot-plug index. Resolve the persisted
     # physical identity against a fresh PortAudio enumeration before testing.

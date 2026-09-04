@@ -252,7 +252,7 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
   "duration_seconds": 14.3,
   "trigger_mode": "confirmed_voice",
   "trigger_threshold_dbfs": null,
-  "vad_threshold": 0.65,
+  "vad_threshold": 0.50,
   "annotation_status": "pending",
   "upload_status": "pending",
   "frequency_hz": 145000000,
@@ -267,7 +267,8 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 
 - `GET /api/health` : État de santé du système et moteur audio
 - `GET /api/audio/devices` : Liste des interfaces audio ALSA / Pulse / USB
-- `POST /api/audio/test-input` : capture réelle 2,5 s (JSON `{ "device_id": 2 }`)
+- `POST /api/audio/test-input` : test PortAudio principal du frontend, capture réelle 2,5 s (JSON `{ "device_id": 2 }`)
+- `POST /api/audio/test` : endpoint historique conservé notamment pour le test GNU Radio par paramètres de requête
 - `GET /api/audio/diagnostics` : PortAudio, périphérique/rates, frames et dernier callback
 - `GET /api/audio/instruments` : présence réellement sondée des entrées, de GNU Radio, du FIFO et du HackRF
 - `GET /api/settings` : Récupère la configuration actuelle
@@ -281,6 +282,9 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 - `DELETE /api/recordings/{id}` : Suppression d'un enregistrement (WAV + JSON)
 - `WebSocket /ws/monitor` : Flux de télémétrie temps réel (~8 Hz)
 
+Les deux endpoints de test refusent d'ouvrir une capture indépendante pendant
+que le moniteur est actif, en ouverture ou en reconnexion.
+
 > **Présence matérielle réelle :** l'interface ne fabrique plus de microphone ou de
 > carte USB de démonstration. Une liste vide signifie que PortAudio/ALSA ne voit
 > aucune entrée. Pour GNU Radio, « connecté » n'est affiché qu'après réception
@@ -292,7 +296,7 @@ Pour les sources acoustiques `microphone` et `usb`, le profil par défaut sépar
 
 Au démarrage de la surveillance, l'état `LEARNING_AMBIENT` accumule 3 secondes d'audio calme vérifié (VAD bas, aucun candidat vocal, aucune voix confirmée et aucun enregistrement). En écoute, le profil borné à 20 secondes ne se met à jour que si la probabilité de parole est inférieure à 0,15, hors candidat et hors enregistrement. Le seuil dynamique vaut par défaut `noise_floor_dbfs + 8 dB` et la décision combine Silero/fallback acoustique, SNR large bande, SNR 250–4000 Hz et changement spectral.
 
-Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmée pendant au moins 160 ms démarre une transmission avec 1,5 s de pré-roll. L'hystérésis VAD (0,65 / 0,35) et un hangover de 2 secondes réunissent les phrases séparées par des pauses. À la finalisation, le masque vocal enlève uniquement les bords inutiles avec 200 ms de marge ; les pauses internes restent intactes. Un événement contenant moins de 300 ms de parole est abandonné.
+Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmée pendant au moins 120 ms démarre une transmission avec 1,5 s de pré-roll. L'hystérésis VAD (0,50 / 0,30) et un hangover de 2 secondes réunissent les phrases séparées par des pauses. À la finalisation, le masque vocal enlève uniquement les bords inutiles avec 200 ms de marge ; les pauses internes restent intactes. Un événement contenant moins de 300 ms de parole est abandonné.
 
 ### Paramètres par défaut importants
 
@@ -305,10 +309,10 @@ Une hausse non vocale devient `RADIO ACTIVITY`, sans fichier. Une voix confirmé
 | `ambient_learning_vad_max` | `0.15` |
 | `ambient_window_seconds` | `20.0` |
 | `noise_margin_db` | `8.0` |
-| `minimum_snr_db` | `6.0` |
+| `minimum_snr_db` | `6.0` (référence de confiance/diagnostic, jamais un veto REC) |
 | `speech_band_low_hz` / `speech_band_high_hz` | `250` / `4000` |
-| `vad_start_threshold` / `vad_stop_threshold` | `0.65` / `0.35` |
-| `minimum_speech_ms` / `minimum_total_speech_ms` | `160` / `300` |
+| `vad_start_threshold` / `vad_stop_threshold` | `0.50` / `0.30` |
+| `minimum_speech_ms` / `minimum_total_speech_ms` | `120` / `300` |
 | `preroll_seconds` | `1.5` |
 | `transmission_hangover_seconds` | `2.0` |
 | `trim_margin_seconds` | `0.2` |
@@ -336,6 +340,8 @@ RAW AUDIO
 ```
 
 `EVENT` ne peut jamais opposer de veto à une voix humaine confirmée.
+De même, `minimum_snr_db` reste à `6.0` comme référence de normalisation de
+confiance et métrique diagnostique ; il n'est pas une exigence minimale pour REC.
 
 ### Validation
 

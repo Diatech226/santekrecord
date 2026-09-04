@@ -17,7 +17,7 @@ class RecordingMetadata(BaseModel):
     # are snapshots, not live controls: recording is authorized by confirmed voice.
     trigger_mode: str = Field(default="confirmed_voice", description="Recording authorization recorded in this file")
     trigger_threshold_dbfs: Optional[float] = Field(default=None, description="Diagnostic event threshold snapshot")
-    vad_threshold: float = Field(default=0.65, description="VAD start threshold snapshot")
+    vad_threshold: float = Field(default=0.50, description="VAD start threshold snapshot")
     annotation_status: str = Field(default="pending", description="Annotation / transcription status")
     upload_status: str = Field(default="pending", description="Sync status")
     
@@ -31,8 +31,8 @@ class RecordingMetadata(BaseModel):
     average_snr_db: Optional[float] = None
     speech_band_snr_db: Optional[float] = None
     vad_backend: str = "unknown"
-    vad_start_threshold: float = 0.65
-    vad_stop_threshold: float = 0.35
+    vad_start_threshold: float = 0.50
+    vad_stop_threshold: float = 0.30
     speech_duration_seconds: float = 0.0
     raw_event_duration_seconds: float = 0.0
     saved_duration_seconds: float = 0.0

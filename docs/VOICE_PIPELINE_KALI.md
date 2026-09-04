@@ -16,8 +16,11 @@ origin is diagnostic metadata only. Archived WAV chunks always remain raw.
 
 The version-2 product defaults are `voice_any_source`, 16 kHz, 3.0 seconds of
 verified quiet audio, VAD learning maximum 0.15, 8 dB event margin, VAD
-start/continue 0.65/0.35, minimum speech 160/300 ms, minimum SNR 6 dB, gain
+start/continue 0.50/0.30, minimum speech 120/300 ms, SNR confidence reference
+6 dB, gain
 1.0 without AGC, automatic channel selection, and 1.5 seconds of pre-roll.
+The SNR reference only normalizes confidence and feeds diagnostics; it never
+vetoes recording after human voice is confirmed.
 There is no legacy configuration migration. A future schema is rejected without
 rewriting it.
 

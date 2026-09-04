@@ -49,9 +49,9 @@ export default function App() {
     minimum_snr_db: 6,
     speech_band_low_hz: 250,
     speech_band_high_hz: 4000,
-    vad_start_threshold: .65,
-    vad_stop_threshold: .35,
-    minimum_speech_ms: 160,
+    vad_start_threshold: .50,
+    vad_stop_threshold: .30,
+    minimum_speech_ms: 120,
     minimum_total_speech_ms: 300,
     transmission_hangover_seconds: 2,
     keep_internal_pause_ms: 1200,
@@ -376,20 +376,34 @@ export default function App() {
 
   const applyManualDeviceOverride = async (partial: Partial<AppSettings>) => {
     const resume = monitorRequested;
-    if (resume) {
-      await api.stopMonitoring();
+    setErrorMessage(null);
+    try {
+      if (resume) {
+        monitoringRef.current = false;
+        await api.stopMonitoring();
+        setMonitorRequested(false);
+        setEngineRunning(false);
+        setDeviceReconnecting(false);
+      }
+      const updated = { ...settings, ...partial };
+      setSettings(updated);
+      await api.saveSettings(updated);
+      if (resume) {
+        setMonitorRequested(true);
+        monitoringRef.current = true;
+        setStatus('opening');
+        await api.startMonitoring(updated);
+        connectMonitorSocket();
+        setEngineRunning(true);
+        setStatus('listening');
+      }
+    } catch (error) {
+      monitoringRef.current = false;
       setMonitorRequested(false);
       setEngineRunning(false);
       setDeviceReconnecting(false);
-    }
-    const updated = { ...settings, ...partial };
-    setSettings(updated);
-    await api.saveSettings(updated);
-    if (resume) {
-      setMonitorRequested(true);
-      setStatus('opening');
-      await api.startMonitoring(updated);
-      connectMonitorSocket();
+      setStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to start monitoring');
     }
   };
 
@@ -844,7 +858,7 @@ export default function App() {
                 levelDbfs={levelDbfs}
                 thresholdDbfs={telemetry?.event_start_threshold_dbfs ?? -38}
                 speechProb={speechProb}
-                vadThreshold={settings.vad_start_threshold ?? .65}
+                vadThreshold={settings.vad_start_threshold ?? .50}
                 voiceDetected={voiceDetected}
                 isMonitoring={isMonitoring}
                 ambientNoiseDbfs={ambientNoiseDbfs}
@@ -856,7 +870,7 @@ export default function App() {
 
               {isMonitoring && (() => {
                 const vadOn = (telemetry?.vad_smoothed_probability ?? 0) >=
-                  (telemetry?.effective_vad_start_threshold ?? .65);
+                  (telemetry?.effective_vad_start_threshold ?? .50);
                 const badges = [
                   ['EVENT', Boolean(telemetry?.event_active)],
                   ['VOICE', Boolean(telemetry?.effective_speech_confirmed)],
@@ -1013,7 +1027,7 @@ export default function App() {
                           {isMonitoring ? speechProb.toFixed(2) : '--'}
                         </div>
                         <div className="text-[9px] font-mono text-[#50525A]">
-                          / {(settings.vad_start_threshold ?? .65).toFixed(2)}
+                          / {(settings.vad_start_threshold ?? .50).toFixed(2)}
                         </div>
                       </div>
                       <div className="w-full bg-[#141518] h-1.5 rounded-full overflow-hidden border border-[#202228]">
