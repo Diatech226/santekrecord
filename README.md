@@ -399,8 +399,10 @@ Manual microphone validation:
 
 Silero is pinned to official release `v6.2.1`. The installer validates the
 model by loading it with ONNX Runtime, checking the `input`, `state`, and `sr`
-inputs, and running a 512-sample dummy inference before atomically installing
-it. A SHA-256 is deliberately not pinned because the release asset was not
+inputs, and running consecutive official-style streaming inferences (64 samples
+of retained context plus each 512-sample frame) before atomically installing it.
+Validation includes silence and a non-zero signal and verifies finite changing
+probabilities plus recurrent-state evolution. A SHA-256 is deliberately not pinned because the release asset was not
 reachable from the environment used to establish a trustworthy digest.
 
 ## TEST 1 — SILERO

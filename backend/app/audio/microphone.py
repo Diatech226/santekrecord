@@ -32,6 +32,7 @@ class MicrophoneSource(AudioSource):
         self.input_channel = input_channel
         self._stream = None
         self._queue: queue.Queue = queue.Queue(maxsize=100)
+        self._read_buffer = np.empty(0, dtype=np.float32)
         self.capture_sample_rate = sample_rate
         self.capture_channels = 1
         self.device_name = "Default input"
@@ -167,6 +168,7 @@ class MicrophoneSource(AudioSource):
             raise RuntimeError("sounddevice is not installed or available on this system")
 
         self._queue = queue.Queue(maxsize=100)
+        self._read_buffer = np.empty(0, dtype=np.float32)
         all_devices = sd.query_devices()
         if self.device_id < 0 or self.device_id >= len(all_devices):
             raise RuntimeError(f"Invalid or stale PortAudio device id {self.device_id}")
@@ -240,18 +242,23 @@ class MicrophoneSource(AudioSource):
             except Exception:
                 pass
             self._stream = None
+        self._read_buffer = np.empty(0, dtype=np.float32)
 
     def read_chunk(self, chunk_size: int = 1024) -> Optional[np.ndarray]:
         if not self._is_active:
             return None
-        try:
-            chunk = self._queue.get(timeout=0.2).astype(np.float32)
+        while len(self._read_buffer) < chunk_size:
+            try:
+                chunk = self._queue.get(timeout=0.2).astype(np.float32)
+            except queue.Empty:
+                return None
             if self.capture_sample_rate != self.sample_rate:
                 from scipy.signal import resample_poly
                 divisor = math.gcd(self.capture_sample_rate, self.sample_rate)
                 chunk = resample_poly(
                     chunk, self.sample_rate // divisor, self.capture_sample_rate // divisor
                 ).astype(np.float32)
-            return chunk
-        except queue.Empty:
-            return None
+            self._read_buffer = np.concatenate((self._read_buffer, chunk))
+        result = self._read_buffer[:chunk_size].copy()
+        self._read_buffer = self._read_buffer[chunk_size:]
+        return result

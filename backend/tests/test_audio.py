@@ -100,6 +100,24 @@ def test_resampling_48000_to_16000():
     assert len(resample_poly(np.ones(48000), 1, 3)) == 16000
 
 
+def test_microphone_read_chunk_normalizes_variable_callback_sizes_to_1024():
+    source = MicrophoneSource(sample_rate=16000)
+    source._is_active = True
+    source.capture_sample_rate = 16000
+    expected = np.arange(480 + 960 + 720 + 400, dtype=np.float32)
+    offset = 0
+    for size in (480, 960, 720, 400):
+        source._queue.put(expected[offset:offset + size])
+        offset += size
+
+    first = source.read_chunk(1024)
+    second = source.read_chunk(1024)
+
+    assert len(first) == len(second) == 1024
+    assert np.array_equal(np.concatenate((first, second)), expected[:2048])
+    assert np.array_equal(source._read_buffer, expected[2048:])
+
+
 def test_auto_channel_does_not_lock_to_noisy_channel_over_voice_channel():
     selector = StableChannelSelector("auto", switch_blocks=3, lock_blocks=4)
     rng = np.random.default_rng(4)

@@ -18,10 +18,15 @@ class ValidSession:
     def __init__(self, path, **_kwargs):
         if Path(path).read_bytes() != b"valid-model":
             raise ValueError("corrupt protobuf")
+        self.calls = 0
     def get_inputs(self):
         return [Input("input"), Input("state"), Input("sr")]
-    def run(self, *_args):
-        return [np.asarray([[.01]], np.float32), np.zeros((2, 1, 128), np.float32)]
+    def run(self, _outputs, feed):
+        assert feed["input"].shape == (1, 576)
+        self.calls += 1
+        probability = .01 + float(np.mean(np.abs(feed["input"])))
+        return [np.asarray([[probability]], np.float32),
+                np.full((2, 1, 128), self.calls, np.float32)]
 
 
 class Response:

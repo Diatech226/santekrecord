@@ -55,3 +55,34 @@ Open **Voice Pipeline / Diagnostics** while monitoring. For every run record:
 
 Synthetic automated tests validate scale, routing, gain, clipping, and decisions;
 they do not substitute for these measurements with the actual Kali interface.
+
+## Silero v6.2.1 streaming validation
+
+Update and start the application on the Kali host:
+
+```bash
+git pull
+./start_kali.sh
+```
+
+Before speaking, verify the diagnostics report:
+
+```text
+VAD BACKEND       silero_onnx
+MODEL LOADED      YES
+VAD INPUT         576 samples
+CONTEXT           64
+FRAME             512
+```
+
+Speak normally for five seconds. `RAW LEVEL` and `PROCESSED LEVEL` must rise,
+then `VAD RAW` must rise clearly, followed by `VAD SMOOTHED`, `SPEECH CANDIDATE
+YES`, `SPEECH CONFIRMED YES`, and `REC ACTIVE`. Repeat close to the microphone,
+at 1–2 metres, and with a human voice played through a radio or loudspeaker. In
+each case the invariant is `human voice → SPEECH → REC`, regardless of source.
+
+For input-path diagnosis only, launch with `SANTEK_DEBUG_VAD_AUDIO=1`. Up to ten
+seconds of the post-resampling/post-gain mono signal presented to the VAD is
+written to `data/debug/vad_input.wav`; its path, duration, 16 kHz sample rate,
+RMS, and peak are logged. The dump is disabled by default and is separate from
+normal archived recordings.
