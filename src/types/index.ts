@@ -92,6 +92,8 @@ export interface AppSettings {
   device_default_samplerate?: number;
   device_alsa_card_id?: string;
   device_alsa_device?: number;
+  /** Runtime hint only: false means the configured identity is temporarily absent. */
+  selected_device_available?: boolean;
   audio_backend?: 'auto' | 'portaudio' | 'alsa';
   sample_rate: number;
   preroll_seconds: number;
@@ -144,6 +146,8 @@ export interface MonitorUpdate {
   recording: boolean;
   status: EngineStatus;
   engine_running?: boolean;
+  monitor_requested?: boolean;
+  selected_device_available?: boolean;
   device_reconnecting?: boolean;
   reconnect_attempt?: number;
   reconnect_elapsed_seconds?: number;

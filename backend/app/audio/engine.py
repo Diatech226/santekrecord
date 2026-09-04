@@ -65,6 +65,7 @@ class MainAudioEngine:
         self.device_identity_match = False
         self._reconnect_identity: Optional[AudioDeviceIdentity] = None
         self._reconnect_device_id: Optional[int] = None
+        self._capture_lock = threading.RLock()
 
         # Metrics for monitoring
         self.current_level_dbfs = -90.0
@@ -311,19 +312,34 @@ class MainAudioEngine:
 
     @staticmethod
     def requires_capture_restart(old_config: AppConfig, new_config: AppConfig) -> bool:
-        fields = ("source", "device_id", "device_name", "audio_backend", "sample_rate",
-                  "input_channel", "fifo_path")
+        fields = ("source", "device_id", "device_name", "device_hostapi",
+                  "device_max_input_channels", "device_default_samplerate",
+                  "device_alsa_card_id", "device_alsa_device", "audio_backend",
+                  "sample_rate", "input_channel", "fifo_path")
+        return any(getattr(old_config, field) != getattr(new_config, field) for field in fields)
+
+    @staticmethod
+    def requires_detection_reconfigure(old_config: AppConfig, new_config: AppConfig) -> bool:
+        fields = ("vad_start_threshold", "vad_stop_threshold", "minimum_speech_ms",
+                  "minimum_snr_db", "noise_margin_db", "ambient_confirm_ms",
+                  "ambient_return_spectral_threshold", "ambient_learning_seconds",
+                  "ambient_learning_vad_max", "ambient_window_seconds", "adaptive_noise",
+                  "adaptive_threshold", "speech_band_low_hz", "speech_band_high_hz",
+                  "detection_profile")
         return any(getattr(old_config, field) != getattr(new_config, field) for field in fields)
 
     def update_config(self, new_config: AppConfig):
-        was_running = self._is_running
-        restart_capture = was_running and self.requires_capture_restart(self.config, new_config)
+        capture_was_requested = self._is_running or self._monitor_requested
+        restart_capture = (capture_was_requested and
+                           self.requires_capture_restart(self.config, new_config))
+        reconfigure_detection = self.requires_detection_reconfigure(self.config, new_config)
         if restart_capture:
             # Save/stop using the old identity before replacing the config.
             self.stop()
         self.config = new_config
         self.recorder.update_config(new_config)
-        self._configure_detection_pipeline()
+        if reconfigure_detection:
+            self._configure_detection_pipeline()
         if restart_capture:
             self.start()
 
@@ -337,7 +353,8 @@ class MainAudioEngine:
         )
 
     def _resolve_capture_device(self) -> None:
-        if self.config.source == "gnuradio" or self.config.device_id is None:
+        if (self.config.source == "gnuradio" or
+                (self.config.device_id is None and not self.config.device_name)):
             return
         devices = MicrophoneSource.list_devices()
         expected = self._reconnect_identity if self.device_reconnecting else self._configured_identity()
@@ -388,6 +405,10 @@ class MainAudioEngine:
         return fallback if fallback.verify_audio_stream() else (fallback.stop() or None)
 
     def start(self) -> bool:
+        with self._capture_lock:
+            return self._start_locked()
+
+    def _start_locked(self) -> bool:
         if self._is_running:
             return True
 
@@ -429,6 +450,8 @@ class MainAudioEngine:
             self._is_running = False
             self.current_error = f"Audio source error: {e}"
             self.current_status = "error"
+            if not self.device_reconnecting:
+                self._monitor_requested = False
             print(f"[MainAudioEngine] Start failed: {e}")
             return False
 
@@ -463,18 +486,26 @@ class MainAudioEngine:
         return True
 
     def stop(self) -> None:
-        self._monitor_requested = False
-        self._is_running = False
-        # Closing first unblocks a worker waiting in read_chunk and releases ALSA
-        # promptly, making repeated Start/Stop safe.
-        if self.source is not None:
+        with self._capture_lock:
+            self._monitor_requested = False
+            self._is_running = False
+            # Snapshot under the transition lock. Closing then unblocks a worker
+            # waiting in read_chunk and promptly releases ALSA.
+            source = self.source
+        if source is not None:
             try:
-                self.source.stop()
+                source.stop()
             except Exception as exc:
                 print(f"[AUDIO ERROR] Stream close failed: {exc}")
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
+        reconnect_thread = self._reconnect_thread
+        if (reconnect_thread is not None and reconnect_thread is not threading.current_thread()
+                and reconnect_thread.is_alive()):
+            reconnect_thread.join(timeout=2.0)
+        if reconnect_thread is not threading.current_thread():
+            self._reconnect_thread = None
 
         self._save_ambient_profile_if_valid()
 
@@ -492,11 +523,12 @@ class MainAudioEngine:
 
     def _handle_device_disconnect(self, reason: str) -> None:
         """Finalize capture and immediately publish the real stopped state."""
-        self.current_error = reason
-        self.current_status = "device_disconnected"
-        self._is_running = False
-        self._reconnect_identity = self._configured_identity()
-        self._reconnect_device_id = self.resolved_device_id or self.config.device_id
+        with self._capture_lock:
+            self.current_error = reason
+            self.current_status = "device_disconnected"
+            self._is_running = False
+            self._reconnect_identity = self._configured_identity()
+            self._reconnect_device_id = self.resolved_device_id or self.config.device_id
         if self.source is not None:
             try:
                 self.source.stop()
@@ -805,6 +837,7 @@ class MainAudioEngine:
             "recording": self.recorder.is_recording,
             "status": self.current_status,
             "engine_running": self._is_running,
+            "monitor_requested": self._monitor_requested,
             "error_message": self.current_error,
             # Opening a FIFO succeeds even when GNU Radio has no writer.  For that
             # source, real received frames are the only honest connectivity signal.
@@ -813,6 +846,11 @@ class MainAudioEngine:
                 and (self.config.source != "gnuradio" or receiving)
             ),
             "device_reconnecting": self.device_reconnecting,
+            "selected_device_available": bool(
+                self.config.source == "gnuradio" or
+                (self.resolved_device_id is not None and self.current_status not in
+                 ("device_disconnected", "reconnecting", "reconnect_failed"))
+            ),
             "reconnect_attempt": self.reconnect_attempt,
             "reconnect_elapsed_seconds": (round(now - self.reconnect_started_at, 1)
                                           if self.device_reconnecting and self.reconnect_started_at else 0.0),

@@ -62,7 +62,11 @@ export default function App() {
   });
 
   const [devices, setDevices] = useState<AudioDevice[]>([]);
-  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [monitorRequested, setMonitorRequested] = useState(false);
+  const [engineRunning, setEngineRunning] = useState(false);
+  const [deviceReconnecting, setDeviceReconnecting] = useState(false);
+  const [reconnectedMessage, setReconnectedMessage] = useState<string | null>(null);
+  const isMonitoring = engineRunning;
   const [status, setStatus] = useState<EngineStatus>('idle');
   const [durationSec, setDurationSec] = useState(0);
   const [levelDbfs, setLevelDbfs] = useState(-90);
@@ -113,6 +117,7 @@ export default function App() {
   // Audio Engine Ref
   const wsRef = useRef<WebSocket | null>(null);
   const monitoringRef = useRef(false);
+  const reconnectingRef = useRef(false);
 
   const connectMonitorSocket = useCallback(() => {
     wsRef.current?.close();
@@ -139,11 +144,38 @@ export default function App() {
           if (update.status) setStatus(update.status);
           if (update.engine_running !== undefined) {
             const running = Boolean(update.engine_running);
-            setIsMonitoring(running);
-            monitoringRef.current = running;
+            setEngineRunning(running);
+          }
+          if (update.monitor_requested !== undefined) {
+            const requested = Boolean(update.monitor_requested);
+            setMonitorRequested(requested);
+            monitoringRef.current = requested;
+          }
+          if (update.device_reconnecting !== undefined) {
+            const reconnecting = Boolean(update.device_reconnecting);
+            if (reconnectingRef.current && !reconnecting && update.engine_running) {
+              const name = update.resolved_device_name ?? update.configured_device_name ?? 'Audio device';
+              setReconnectedMessage(`✓ ${name} RECONNECTED`);
+              window.setTimeout(() => setReconnectedMessage(null), 3000);
+            }
+            reconnectingRef.current = reconnecting;
+            setDeviceReconnecting(reconnecting);
+          }
+          if (update.engine_running && update.device_identity_match && update.resolved_device_id !== undefined) {
+            setSettings(current => {
+              if (String(current.device_id) === String(update.resolved_device_id)) return current;
+              const synchronized = {
+                ...current,
+                device_id: update.resolved_device_id ?? current.device_id,
+                device_name: update.resolved_device_name ?? current.device_name,
+                selected_device_available: true,
+              };
+              void api.saveSettings(synchronized);
+              return synchronized;
+            });
           }
           if (update.communication_duration_seconds !== undefined) setDurationSec(update.communication_duration_seconds);
-          if (update.error_message) setErrorMessage(update.error_message);
+          if ('error_message' in update) setErrorMessage(update.error_message ?? null);
         } catch {
           // ignore malformed ws messages
         }
@@ -195,18 +227,22 @@ export default function App() {
       ]);
 
       if (loadedSettings.source !== 'gnuradio') {
-        Object.assign(loadedSettings, reconcileSelectedDevice(loadedDevices, loadedSettings));
-        await api.saveSettings(loadedSettings);
+        const reconciled = reconcileSelectedDevice(loadedDevices, loadedSettings);
+        Object.assign(loadedSettings, reconciled);
+        if (reconciled.selected_device_available) await api.saveSettings(loadedSettings);
       }
       setSettings(loadedSettings);
       setDevices(loadedDevices);
       setRecordings(loadedRecordings);
+      // Telemetry is authoritative for monitor intent, including a reconnect
+      // already in progress when the page is opened or refreshed.
+      connectMonitorSocket();
       if (loadedRecordings.length > 0) {
         setSelectedRecording(loadedRecordings[0]);
       }
     }
     init();
-  }, []);
+  }, [connectMonitorSocket]);
 
   // Sync settings updates to Audio Engine and API
   const handleUpdateSettings = useCallback(
@@ -222,7 +258,7 @@ export default function App() {
   const toggleMonitoring = async () => {
     setErrorMessage(null);
 
-    if (isMonitoring) {
+    if (monitorRequested) {
       // Stop
       monitoringRef.current = false;
       if (wsRef.current) {
@@ -230,7 +266,9 @@ export default function App() {
         wsRef.current = null;
       }
       await api.stopMonitoring();
-      setIsMonitoring(false);
+      setMonitorRequested(false);
+      setEngineRunning(false);
+      setDeviceReconnecting(false);
       setStatus('idle');
       setLevelDbfs(-90);
       setSpeechProb(0);
@@ -245,12 +283,15 @@ export default function App() {
           throw new Error('NO DEVICE: select an audio input before monitoring');
         }
         setStatus('opening');
-        await api.startMonitoring(settings);
+        setMonitorRequested(true);
         monitoringRef.current = true;
+        await api.startMonitoring(settings);
         connectMonitorSocket();
-        setIsMonitoring(true);
+        setEngineRunning(true);
         setStatus('listening');
       } catch (error) {
+        setMonitorRequested(false);
+        monitoringRef.current = false;
         setErrorMessage(error instanceof Error ? error.message : 'Unable to start monitoring');
         setStatus('error');
       }
@@ -292,17 +333,21 @@ export default function App() {
     try {
       const freshDevices = await api.getAudioDevices();
       setDevices(freshDevices);
-      void handleUpdateSettings(reconcileSelectedDevice(freshDevices, settings));
+      if (!(monitorRequested && deviceReconnecting)) {
+        const reconciled = reconcileSelectedDevice(freshDevices, settings);
+        setSettings(current => ({ ...current, ...reconciled }));
+        if (reconciled.selected_device_available) void handleUpdateSettings(reconciled);
+      }
     } catch {
       // ignore
     } finally {
       setIsRefreshingDevices(false);
     }
-  }, [settings.device_id, handleUpdateSettings]);
+  }, [settings, handleUpdateSettings, monitorRequested, deviceReconnecting]);
 
   // Periodic polling for hotplugged USB audio devices when not actively monitoring
   useEffect(() => {
-    if (isMonitoring) return;
+    if (monitorRequested) return;
     const timer = setInterval(() => {
       api.getAudioDevices().then((fresh) => {
         setDevices((prev) => {
@@ -319,7 +364,12 @@ export default function App() {
       }).catch(() => {});
     }, 4000);
     return () => clearInterval(timer);
-  }, [isMonitoring]);
+  }, [monitorRequested]);
+
+  const retryMonitoring = async () => {
+    if (!monitorRequested) await toggleMonitoring();
+    else if (deviceReconnecting) await handleRefreshDevices();
+  };
 
   const handleSourceChange = (source: AudioSourceType) => {
     if (source === 'gnuradio') {
@@ -538,15 +588,20 @@ export default function App() {
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>{errorMessage}</span>
             </div>
-            <button
+            {(!monitorRequested || deviceReconnecting) && <button
               id="btn-retry-error"
               type="button"
-              onClick={toggleMonitoring}
+              onClick={retryMonitoring}
               className="px-2.5 py-1 bg-[#FF4444]/20 hover:bg-[#FF4444]/30 text-white rounded text-[11px] flex items-center gap-1 transition-colors uppercase tracking-wider"
             >
               <RefreshCw className="w-3 h-3" />
               {t.retry}
-            </button>
+            </button>}
+          </div>
+        )}
+        {reconnectedMessage && (
+          <div role="status" className="mb-6 p-3 bg-[#00FF66]/10 border border-[#00FF66]/40 rounded text-xs text-[#00FF66]">
+            {reconnectedMessage}
           </div>
         )}
 
@@ -562,7 +617,7 @@ export default function App() {
                 source={settings.source}
                 deviceId={settings.device_id}
                 devices={devices}
-                disabled={isMonitoring}
+                disabled={engineRunning}
                 isRefreshing={isRefreshingDevices}
                 onRefreshDevices={handleRefreshDevices}
                 connectionStatus={status}
@@ -591,8 +646,16 @@ export default function App() {
                     <details className="text-[10px] border border-[#202226] rounded p-2 text-[#A0A0A0]">
                       <summary className="cursor-pointer uppercase text-[#00F0FF]">Diagnostics / Advanced</summary>
                       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2">
-                        <dt>Device</dt><dd>{telemetry.device_name ?? settings.device_name ?? '—'}</dd>
-                        <dt>Device ID</dt><dd>{settings.device_id ?? '—'}</dd>
+                        <dt>Configured Device</dt><dd>{telemetry.configured_device_name ?? settings.device_name ?? '—'}</dd>
+                        <dt>Resolved Device</dt><dd>{telemetry.resolved_device_name ?? '—'}</dd>
+                        <dt>Configured ID</dt><dd>{telemetry.configured_device_id ?? settings.device_id ?? '—'}</dd>
+                        <dt>Resolved ID</dt><dd>{telemetry.resolved_device_id ?? '—'}</dd>
+                        <dt>Device Available</dt><dd>{telemetry.selected_device_available ? 'Yes' : 'No'}</dd>
+                        <dt>Monitor Requested</dt><dd>{monitorRequested ? 'Yes' : 'No'}</dd>
+                        <dt>Engine Running</dt><dd>{engineRunning ? 'Yes' : 'No'}</dd>
+                        <dt>Reconnecting</dt><dd>{deviceReconnecting ? 'Yes' : 'No'}</dd>
+                        <dt>Reconnect Attempt</dt><dd>{telemetry.reconnect_attempt ?? 0}</dd>
+                        <dt>Reconnect Elapsed</dt><dd>{telemetry.reconnect_elapsed_seconds ?? 0}s</dd>
                         <dt>Capture Backend</dt><dd>{telemetry.capture_backend ?? telemetry.hostapi ?? '—'}</dd>
                         <dt>ALSA Device</dt><dd>{telemetry.alsa_device ?? '—'}</dd>
                         <dt>Native Rate</dt><dd>{telemetry.capture_sample_rate ?? '—'} Hz</dd>
@@ -647,7 +710,7 @@ export default function App() {
                 type="button"
                 onClick={toggleMonitoring}
                 style={
-                  !isMonitoring
+                  !monitorRequested
                     ? ({
                         backgroundColor: accentColor,
                         color: '#0A0B0D',
@@ -659,13 +722,13 @@ export default function App() {
                     : undefined
                 }
                 className={`w-full py-3.5 px-4 font-mono font-bold text-xs uppercase tracking-[0.15em] rounded transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                  isMonitoring
+                  monitorRequested
                     ? 'bg-[#FF4444] hover:bg-[#FF2222] text-white shadow-[0_0_15px_rgba(255,68,68,0.4)]'
                     : 'hover:brightness-110 animate-surveillance-breathe'
                 }`}
               >
-                <Power className={`w-4 h-4 transition-transform duration-300 ${!isMonitoring ? 'group-hover:scale-110' : ''}`} />
-                {isMonitoring ? t.terminateSurveillance : status === 'opening'
+                <Power className={`w-4 h-4 transition-transform duration-300 ${!monitorRequested ? 'group-hover:scale-110' : ''}`} />
+                {monitorRequested ? t.terminateSurveillance : status === 'opening'
                   ? `Opening ${settings.device_name ?? 'audio device'}...` : t.startSurveillance}
               </button>
 
@@ -708,7 +771,13 @@ export default function App() {
               </div>
 
               {/* Informative Sound Card & Live Acquisition Banner */}
-              {!isMonitoring ? (
+              {deviceReconnecting ? (
+                <div id="soundcard-reconnecting-banner" className="p-3 bg-[#FFB800]/10 border border-[#FFB800]/30 rounded text-xs text-[#FFB800]">
+                  <div className="font-bold">⚠ {settings.device_name ?? 'AUDIO DEVICE'} DISCONNECTED</div>
+                  <div>RECONNECTING… · Attempt {telemetry?.reconnect_attempt ?? 0} · {telemetry?.reconnect_elapsed_seconds ?? 0}s</div>
+                  <div className="mt-1 text-[10px]">Waiting for the configured device; no fallback input will be selected.</div>
+                </div>
+              ) : !engineRunning ? (
                 <div id="soundcard-standby-banner" className="p-3 bg-[#151619] border border-[#2A2B2F] rounded text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
                   <div className="flex items-center gap-2 text-[#A0A0A0]">
                     <Activity className="w-4 h-4 text-[#00F0FF] shrink-0" />
