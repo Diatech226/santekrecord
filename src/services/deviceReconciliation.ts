@@ -7,21 +7,31 @@ const sameIdentity = (device: AudioDevice, settings: AppSettings) =>
 
 export function reconcileSelectedDevice(
   freshDevices: AudioDevice[], settings: AppSettings,
+  options: { allowFallback?: boolean } = {},
 ): Partial<AppSettings> {
   if (settings.source === 'gnuradio') return {};
+  const hasConfiguredIdentity = Boolean(settings.device_name);
   const exact = freshDevices.find(device =>
     String(device.id) === String(settings.device_id) && sameIdentity(device, settings));
-  const replacement = exact
-    ?? freshDevices.find(device => sameIdentity(device, settings))
-    ?? (settings.source === 'usb' ? freshDevices.find(device => device.type === 'usb') : undefined)
-    ?? freshDevices.find(device => device.is_default)
-    ?? freshDevices[0];
-  return replacement ? {
-    device_id: Number(replacement.id), device_name: replacement.name,
-    device_hostapi: replacement.hostapi,
-    device_max_input_channels: replacement.max_input_channels,
-    device_default_samplerate: replacement.default_samplerate,
-    device_alsa_card_id: replacement.alsa_card_id ?? undefined,
-    device_alsa_device: replacement.alsa_device ?? undefined,
-  } : { device_id: null };
+  const identityMatches = freshDevices.filter(device => sameIdentity(device, settings));
+  const nameMatches = freshDevices.filter(device => device.name === settings.device_name);
+  const replacement = exact ?? (identityMatches.length === 1 ? identityMatches[0] : undefined)
+    ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
+  const allowFallback = options.allowFallback ?? !hasConfiguredIdentity;
+  const selected = replacement ?? (allowFallback
+    ? freshDevices.find(device => device.is_default) ?? freshDevices[0]
+    : undefined);
+  return selected ? {
+    device_id: Number(selected.id), device_name: selected.name,
+    device_hostapi: selected.hostapi,
+    device_max_input_channels: selected.max_input_channels,
+    device_default_samplerate: selected.default_samplerate,
+    device_alsa_card_id: selected.alsa_card_id ?? undefined,
+    device_alsa_device: selected.alsa_device ?? undefined,
+    selected_device_available: true,
+  } : {
+    // A null volatile id does not erase the persisted physical identity.
+    device_id: hasConfiguredIdentity ? settings.device_id : null,
+    selected_device_available: false,
+  };
 }

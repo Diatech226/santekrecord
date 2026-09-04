@@ -101,3 +101,17 @@ The refresh button and device selector become available as soon as telemetry say
 `engine_running=false`. Automatic reconnect scans every 1.5 seconds for up to 45
 seconds and matches the configured identity/name or ALSA `card_id`; it does not
 choose another microphone merely because the old numeric index was reused.
+# USB hot-plug field validation
+
+1. Run `git pull`, then `./start_kali.sh`.
+2. Select **USB Audio CODEC**, start monitoring, and confirm speaking reaches
+   `SPEECH` / `REC`.
+3. Unplug the device. Confirm **DISCONNECTED**, **RECONNECTING**, and **STOP
+   SURVEILLANCE** remain visible. Confirm neither the built-in microphone nor
+   another USB input is selected.
+4. Reconnect the same card. Its PortAudio id may change; confirm the resolved id
+   updates and **LISTENING** resumes, then confirm speech reaches `SPEECH` / `REC`
+   again.
+5. Repeat while leaving the card unplugged for the full timeout. Confirm
+   `reconnect_failed`, with monitor requested and engine running both false, then
+   use **RETRY**.
