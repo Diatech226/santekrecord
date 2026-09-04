@@ -42,7 +42,7 @@ def test_snr_change_is_effective_after_save(tmp_path):
 def test_vad_threshold_change_is_effective_after_save(tmp_path):
     engine = MainAudioEngine(config(), ambient_profiles_dir=tmp_path)
     engine.update_config(config(vad_start_threshold=.42, vad_stop_threshold=.21,
-                                minimum_speech_ms=90))
+                                minimum_speech_ms=129))
     effective = engine.get_effective_detection_config()
     assert effective["effective_vad_start_threshold"] == .42
     assert effective["effective_vad_stop_threshold"] == .21
@@ -53,9 +53,12 @@ def test_configured_detection_values_equal_effective_values(tmp_path):
                                     minimum_snr_db=9, minimum_speech_ms=275),
                              ambient_profiles_dir=tmp_path)
     effective = engine.get_effective_detection_config()
-    for field in ("vad_start_threshold", "vad_stop_threshold", "minimum_snr_db",
-                  "minimum_speech_ms"):
+    for field in ("vad_start_threshold", "vad_stop_threshold", "minimum_snr_db"):
         assert effective[f"configured_{field}"] == effective[f"effective_{field}"]
+    assert effective["configured_minimum_speech_ms"] == 275
+    assert effective["effective_minimum_speech_ms"] == 320
+    assert effective["speech_confirmation_frames"] == 5
+    assert effective["speech_frame_ms"] == 64
 
 
 def test_vad_reset_clears_pending():

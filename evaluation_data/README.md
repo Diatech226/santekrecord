@@ -15,7 +15,7 @@ communications sensibles et sont ignorés par Git.
 5. Lancer `evaluate`, puis examiner les trois rapports dans `evaluation_results/`.
 6. Lancer `tune --trials 50` et examiner `recommended_config.json`.
 7. Tester manuellement la recommandation sur le live. Le tuner ne modifie jamais
-   `config.json`.
+   `data/config.json`.
 
 ## Schéma minimal
 

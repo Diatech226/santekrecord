@@ -48,7 +48,7 @@ class ParameterTuner:
             metrics = self.evaluator(config)
             ranked.append({"score": global_score(metrics), "parameters": params, "metrics": metrics})
         ranked.sort(key=lambda x: x["score"], reverse=True)
-        recommendation = {"notice": "Recommendation only; config.json was not modified.", "best": ranked[0],
+        recommendation = {"notice": "Recommendation only; data/config.json was not modified.", "best": ranked[0],
                           "trials": len(ranked), "weights": DEFAULT_WEIGHTS}
         output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(recommendation, indent=2) + "\n", encoding="utf-8")

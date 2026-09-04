@@ -65,6 +65,18 @@ def test_vad_hysteresis_and_short_impulse_rejection():
     assert detector.process(.4, -40, -55, 15, 10, .2).speech_confirmed
 
 
+def test_minimum_speech_duration_uses_ceiling_frame_quantization():
+    assert [SpeechDetector(minimum_speech_ms=value, frame_ms=64).required
+            for value in (128, 129, 192, 193)] == [2, 3, 3, 4]
+
+
+def test_default_minimum_speech_is_exactly_two_processing_frames():
+    detector = SpeechDetector()
+    assert detector.minimum_speech_ms == 128
+    assert detector.required == 2
+    assert detector.effective_minimum_speech_ms == 128
+
+
 def test_segmentation_and_trim_preserve_internal_pause():
     segmenter = SpeechSegmenter()
     segmenter.add(1000, 4000, True, .9)

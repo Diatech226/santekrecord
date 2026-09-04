@@ -152,7 +152,9 @@ class MainAudioEngine:
             "effective_vad_stop_threshold": self.speech_detector.continue_,
             "vad_continue_threshold": self.speech_detector.continue_,
             "effective_minimum_snr_db": self.speech_detector.minimum_snr,
-            "effective_minimum_speech_ms": self.speech_detector.minimum_speech_ms,
+            "effective_minimum_speech_ms": self.speech_detector.effective_minimum_speech_ms,
+            "speech_confirmation_frames": self.speech_detector.required,
+            "speech_frame_ms": self.speech_detector.frame_ms,
         }
 
     def subscribe(self, callback: Callable[[Dict[str, Any]], None]):

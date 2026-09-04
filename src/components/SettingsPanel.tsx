@@ -61,7 +61,7 @@ export const SettingsPanel: React.FC<Props> = ({
                 ['VAD Start', 'vad_start_threshold', settings.vad_start_threshold ?? .50, 0, 1, .05],
                 ['VAD Continue', 'vad_stop_threshold', settings.vad_stop_threshold ?? .30, 0, 1, .05],
                 ['SNR Confidence Reference', 'minimum_snr_db', settings.minimum_snr_db ?? 6, 0, 20, 1],
-                ['Minimum Speech', 'minimum_speech_ms', settings.minimum_speech_ms ?? 120, 40, 1000, 20],
+                ['Minimum Voice Duration', 'minimum_speech_ms', settings.minimum_speech_ms ?? 128, 128, 1024, 64],
               ] as const).map(([label, key, value, min, max, step]) => <label key={key} className="space-y-1">
                 <span className="flex justify-between text-[#A0A0A0]"><b>{label}</b><em>{value}{key.endsWith('_ms') ? ' ms' : key.includes('snr') ? ' dB' : ''}</em></span>
                 <input type="range" min={min} max={max} step={step} disabled={disabled} value={value}
@@ -69,6 +69,7 @@ export const SettingsPanel: React.FC<Props> = ({
                   className="w-full accent-[#00F0FF]" />
               </label>)}
             </div>
+            <p className="mt-2 text-[#707070]">Detection is evaluated in ~64 ms frames.</p>
           </details>
         }
 

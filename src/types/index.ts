@@ -198,6 +198,8 @@ export interface MonitorUpdate {
   effective_vad_stop_threshold?: number;
   effective_minimum_snr_db?: number;
   effective_minimum_speech_ms?: number;
+  speech_confirmation_frames?: number;
+  speech_frame_ms?: number;
   device_connected?: boolean;
   audio_frames_received?: boolean;
   frames_received?: number;
