@@ -38,13 +38,31 @@ def validate_model(path: Path) -> tuple[bool, str]:
         missing = EXPECTED_INPUTS - names
         if missing:
             return False, f"missing expected ONNX inputs: {', '.join(sorted(missing))}"
-        outputs = session.run(None, {
-            "input": np.zeros((1, 512), dtype=np.float32),
-            "state": np.zeros((2, 1, 128), dtype=np.float32),
-            "sr": np.asarray(16000, dtype=np.int64),
-        })
-        if not outputs or np.asarray(outputs[0]).size == 0:
-            return False, "dummy inference returned no speech probability"
+        state = np.zeros((2, 1, 128), dtype=np.float32)
+        context = np.zeros((1, 64), dtype=np.float32)
+        probabilities = []
+        states = []
+        frames = [np.zeros((1, 512), dtype=np.float32),
+                  np.sin(np.arange(512, dtype=np.float32) * (2 * np.pi * 220 / 16000))[None] * .2]
+        for frame in frames:
+            model_input = np.concatenate((context, frame), axis=1).astype(np.float32)
+            if model_input.shape != (1, 576):
+                return False, f"invalid streaming input shape: {model_input.shape}"
+            outputs = session.run(None, {"input": model_input, "state": state,
+                                         "sr": np.asarray(16000, dtype=np.int64)})
+            if len(outputs) < 2:
+                return False, "inference did not return probability and recurrent state"
+            probability = float(np.asarray(outputs[0]).reshape(-1)[0])
+            if not np.isfinite(probability):
+                return False, "inference returned a non-finite speech probability"
+            probabilities.append(probability)
+            state = np.asarray(outputs[1], dtype=np.float32)
+            states.append(state.copy())
+            context = model_input[:, -64:].copy()
+        if not np.isfinite(state).all() or not np.any(states[-1] != states[0]):
+            return False, "recurrent state did not evolve across validation frames"
+        if probabilities[0] == probabilities[1]:
+            return False, "speech probability did not change for a non-zero input"
     except Exception as exc:
         return False, f"ONNX validation failed ({type(exc).__name__}): {exc}"
     return True, f"valid Silero ONNX model ({path.stat().st_size} bytes)"

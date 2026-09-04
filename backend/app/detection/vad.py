@@ -2,6 +2,7 @@
 from collections import deque
 from pathlib import Path
 import os
+import wave
 import numpy as np
 
 try:
@@ -21,12 +22,14 @@ class SileroVADDetector:
     preferred; a local torch-hub checkout remains supported for compatibility.
     """
     frame_samples = 512
+    context_samples = 64
 
     def __init__(self, sample_rate=16000):
         self.sample_rate = sample_rate
         self.model = None
         self._onnx_session = None
         self._onnx_state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._onnx_context = np.zeros((1, self.context_samples), dtype=np.float32)
         self.vad_backend = "acoustic_fallback"
         self.vad_model_loaded = False
         self.vad_error = None
@@ -37,6 +40,10 @@ class SileroVADDetector:
         self.last_smoothed_probability = 0.0
         self.last_input_rms = 0.0
         self.last_input_abs_max = 0.0
+        self._debug_wave = None
+        self._debug_samples_written = 0
+        self._debug_sum_squares = 0.0
+        self._debug_abs_max = 0.0
         self._init_model()
 
     def _init_model(self):
@@ -78,6 +85,7 @@ class SileroVADDetector:
         chunk = np.clip(chunk, -1.0, 1.0).astype(np.float32, copy=False)
         self.last_input_rms = float(np.sqrt(np.mean(np.square(chunk, dtype=np.float64))))
         self.last_input_abs_max = float(np.max(np.abs(chunk)))
+        self._write_debug_audio(chunk)
         self._pending = np.concatenate((self._pending, chunk))
         probabilities = []
         while len(self._pending) >= self.frame_samples:
@@ -106,6 +114,8 @@ class SileroVADDetector:
         self.last_input_rms = 0.0
         self.last_input_abs_max = 0.0
         self._onnx_state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._onnx_context = np.zeros((1, self.context_samples), dtype=np.float32)
+        self._close_debug_audio()
         if self.model is not None:
             reset_states = getattr(self.model, "reset_states", None)
             if callable(reset_states):
@@ -113,19 +123,29 @@ class SileroVADDetector:
 
     def _infer_frame(self, frame):
         if self._onnx_session is not None:
+            onnx_frame = np.asarray(frame, dtype=np.float32).reshape(1, self.frame_samples)
+            model_input = np.concatenate((self._onnx_context, onnx_frame), axis=1).astype(
+                np.float32, copy=False
+            )
             try:
                 names = {item.name for item in self._onnx_session.get_inputs()}
-                feed = {"input": frame.reshape(1, -1)}
+                feed = {"input": model_input}
                 if "state" in names:
                     feed["state"] = self._onnx_state
                 if "sr" in names:
                     feed["sr"] = np.asarray(self.sample_rate, dtype=np.int64)
                 outputs = self._onnx_session.run(None, feed)
                 if len(outputs) > 1:
-                    self._onnx_state = outputs[1]
+                    self._onnx_state = np.asarray(outputs[1], dtype=np.float32)
+                self._onnx_context = model_input[:, -self.context_samples:].copy()
                 return float(np.clip(np.asarray(outputs[0]).reshape(-1)[0], 0, 1))
             except Exception as exc:
-                self.vad_error = f"Silero ONNX inference failed: {type(exc).__name__}: {exc}"
+                self.vad_error = (
+                    "Silero ONNX inference failed: "
+                    f"input={model_input.shape} state={self._onnx_state.shape} "
+                    f"sr={self.sample_rate} error={type(exc).__name__}: {exc}"
+                )
+                print(f"[SILERO ERROR] {self.vad_error}")
                 self._onnx_session = None
                 self.vad_model_loaded, self.vad_backend = False, "acoustic_fallback"
         if self.model is not None:
@@ -136,6 +156,42 @@ class SileroVADDetector:
                 self.vad_error = f"Silero inference failed: {type(exc).__name__}: {exc}"
                 self.model, self.vad_model_loaded, self.vad_backend = None, False, "acoustic_fallback"
         return self._acoustic_vad_fallback(frame)
+
+    def _write_debug_audio(self, chunk):
+        """Optionally dump exactly the normalized signal presented to this VAD."""
+        if os.environ.get("SANTEK_DEBUG_VAD_AUDIO") != "1":
+            return
+        limit = self.sample_rate * 10
+        remaining = limit - self._debug_samples_written
+        if remaining <= 0:
+            return
+        samples = np.asarray(chunk[:remaining], dtype=np.float32)
+        if self._debug_wave is None:
+            path = Path("data/debug/vad_input.wav")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._debug_wave = wave.open(str(path), "wb")
+            self._debug_wave.setnchannels(1)
+            self._debug_wave.setsampwidth(2)
+            self._debug_wave.setframerate(self.sample_rate)
+            print(f"[DEBUG VAD AUDIO] path={path} sample_rate={self.sample_rate}")
+        pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2")
+        self._debug_wave.writeframesraw(pcm.tobytes())
+        self._debug_samples_written += len(samples)
+        self._debug_sum_squares += float(np.sum(np.square(samples, dtype=np.float64)))
+        self._debug_abs_max = max(self._debug_abs_max, float(np.max(np.abs(samples), initial=0)))
+        if self._debug_samples_written >= limit:
+            self._close_debug_audio()
+
+    def _close_debug_audio(self):
+        if self._debug_wave is None:
+            return
+        self._debug_wave.close()
+        self._debug_wave = None
+        duration = self._debug_samples_written / self.sample_rate
+        rms = np.sqrt(self._debug_sum_squares / max(1, self._debug_samples_written))
+        print("[DEBUG VAD AUDIO] "
+              f"path=data/debug/vad_input.wav duration={duration:.2f}s "
+              f"sample_rate={self.sample_rate} rms={rms:.7f} peak={self._debug_abs_max:.7f}")
 
     def _acoustic_vad_fallback(self, chunk):
         rms = float(np.sqrt(np.mean(chunk ** 2)))
@@ -153,6 +209,9 @@ class SileroVADDetector:
     def diagnostics(self):
         return {"vad_backend": self.vad_backend, "vad_model_loaded": self.vad_model_loaded,
                 "vad_error": self.vad_error,
+                "vad_frame_samples": self.frame_samples,
+                "vad_context_samples": self.context_samples,
+                "vad_model_input_samples": self.frame_samples + self.context_samples,
                 "vad_raw_probability": round(self.last_raw_probability, 4),
                 "vad_smoothed_probability": round(self.last_smoothed_probability, 4),
                 "sample_rms": round(self.last_input_rms, 7),
