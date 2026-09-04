@@ -13,6 +13,7 @@ interface Props {
   onOpenTroubleshoot?: () => void;
   onSourceChange: (source: AudioSourceType) => void;
   onDeviceChange: (deviceId: string | number) => void;
+  connectionStatus?: string;
 }
 
 export const SourceSelector: React.FC<Props> = ({
@@ -25,6 +26,7 @@ export const SourceSelector: React.FC<Props> = ({
   onOpenTroubleshoot,
   onSourceChange,
   onDeviceChange,
+  connectionStatus,
 }) => {
   const { t } = useLanguage();
 
@@ -48,7 +50,8 @@ export const SourceSelector: React.FC<Props> = ({
           nameLower.includes('card')
         );
       });
-      return usbCandidates;
+      const candidateIds = new Set(usbCandidates.map(device => String(device.id)));
+      return [...usbCandidates, ...devices.filter(device => !candidateIds.has(String(device.id)))];
     }
     return devices.filter((device) => device.type !== 'usb' && device.type !== 'line');
   }, [devices, source]);
@@ -121,6 +124,11 @@ export const SourceSelector: React.FC<Props> = ({
       {/* Device dropdown or HackRF FIFO info */}
       {source !== 'gnuradio' ? (
         <div className="space-y-1.5">
+          {(connectionStatus === 'device_disconnected' || connectionStatus === 'reconnecting') && (
+            <div role="status" className="text-[10px] font-bold text-amber-400">
+              {connectionStatus === 'reconnecting' ? '⚠ DEVICE DISCONNECTED · RECONNECTING…' : '⚠ DEVICE DISCONNECTED'}
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <label htmlFor="device-select" className="text-[10px] text-[#A0A0A0] uppercase tracking-wider block">
               {t.deviceInterface}
