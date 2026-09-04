@@ -124,6 +124,7 @@ class MicrophoneSource(AudioSource):
                     mapping = match_alsa_device(item["name"])
                     item.update({
                         "alsa_card": mapping.card if mapping else None,
+                        "alsa_card_id": mapping.card_id if mapping else None,
                         "alsa_device": mapping.device if mapping else None,
                         "alsa_identifier": mapping.identifier if mapping else None,
                     })
@@ -252,6 +253,22 @@ class MicrophoneSource(AudioSource):
                 chunk = self._queue.get(timeout=0.2).astype(np.float32)
             except queue.Empty:
                 return None
+            if self.capture_sample_rate != self.sample_rate:
+                from scipy.signal import resample_poly
+                divisor = math.gcd(self.capture_sample_rate, self.sample_rate)
+                chunk = resample_poly(
+                    chunk, self.sample_rate // divisor, self.capture_sample_rate // divisor
+                ).astype(np.float32)
+            self._read_buffer = np.concatenate((self._read_buffer, chunk))
+        # Drain already-delivered callback blocks without waiting. Keeping all
+        # currently available frames in this source-owned buffer avoids stale
+        # queue data surviving stop/start pressure while preserving 1024-frame
+        # processing chunks.
+        while True:
+            try:
+                chunk = self._queue.get_nowait().astype(np.float32)
+            except queue.Empty:
+                break
             if self.capture_sample_rate != self.sample_rate:
                 from scipy.signal import resample_poly
                 divisor = math.gcd(self.capture_sample_rate, self.sample_rate)

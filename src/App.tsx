@@ -8,6 +8,7 @@ import {
   RecordingMeta,
 } from './types';
 import { api } from './services/api';
+import { reconcileSelectedDevice } from './services/deviceReconciliation';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AudioMeter } from './components/AudioMeter';
 import { SourceSelector } from './components/SourceSelector';
@@ -136,6 +137,11 @@ export default function App() {
           if (Array.isArray(update.waveform)) setLiveWaveform(update.waveform);
           if (Array.isArray(update.spectrum)) setSpectrum(update.spectrum);
           if (update.status) setStatus(update.status);
+          if (update.engine_running !== undefined) {
+            const running = Boolean(update.engine_running);
+            setIsMonitoring(running);
+            monitoringRef.current = running;
+          }
           if (update.communication_duration_seconds !== undefined) setDurationSec(update.communication_duration_seconds);
           if (update.error_message) setErrorMessage(update.error_message);
         } catch {
@@ -189,21 +195,8 @@ export default function App() {
       ]);
 
       if (loadedSettings.source !== 'gnuradio') {
-        const valid = loadedDevices.find(d => String(d.id) === String(loadedSettings.device_id));
-        if (!valid) {
-          const previousByName = loadedDevices.find(d => d.name === loadedSettings.device_name);
-          const replacement = previousByName
-            ?? (loadedSettings.source === 'usb' ? loadedDevices.find(d => d.type === 'usb') : undefined)
-            ?? loadedDevices.find(d => d.is_default)
-            ?? loadedDevices[0];
-          if (replacement) {
-            loadedSettings.device_id = Number(replacement.id);
-            loadedSettings.device_name = replacement.name;
-            await api.saveSettings(loadedSettings);
-          } else {
-            loadedSettings.device_id = null;
-          }
-        }
+        Object.assign(loadedSettings, reconcileSelectedDevice(loadedDevices, loadedSettings));
+        await api.saveSettings(loadedSettings);
       }
       setSettings(loadedSettings);
       setDevices(loadedDevices);
@@ -299,20 +292,7 @@ export default function App() {
     try {
       const freshDevices = await api.getAudioDevices();
       setDevices(freshDevices);
-      if (freshDevices.length > 0) {
-        const currentFound = freshDevices.some(
-          (d) => String(d.id) === String(settings.device_id)
-        );
-        if (!currentFound) {
-          const fallback =
-            freshDevices.find((d) => d.type === 'usb' || d.is_default) ||
-            freshDevices[0];
-          void handleUpdateSettings({
-            device_id: fallback.id,
-            device_name: fallback.name,
-          });
-        }
-      }
+      void handleUpdateSettings(reconcileSelectedDevice(freshDevices, settings));
     } catch {
       // ignore
     } finally {
@@ -325,14 +305,17 @@ export default function App() {
     if (isMonitoring) return;
     const timer = setInterval(() => {
       api.getAudioDevices().then((fresh) => {
-        if (fresh.length > 0) {
-          setDevices((prev) => {
+        setDevices((prev) => {
             if (JSON.stringify(prev) !== JSON.stringify(fresh)) {
               return fresh;
             }
             return prev;
-          });
-        }
+        });
+        setSettings((current) => {
+          const reconciled = { ...current, ...reconcileSelectedDevice(fresh, current) };
+          if (JSON.stringify(reconciled) !== JSON.stringify(current)) void api.saveSettings(reconciled);
+          return reconciled;
+        });
       }).catch(() => {});
     }, 4000);
     return () => clearInterval(timer);
@@ -582,11 +565,19 @@ export default function App() {
                 disabled={isMonitoring}
                 isRefreshing={isRefreshingDevices}
                 onRefreshDevices={handleRefreshDevices}
+                connectionStatus={status}
                 onOpenTroubleshoot={() => setIsTroubleshootModalOpen(true)}
                 onSourceChange={handleSourceChange}
                 onDeviceChange={(devId: string | number) => {
                   const dev = devices.find((d) => String(d.id) === String(devId));
-                  handleUpdateSettings({ device_id: Number(devId), device_name: dev?.name });
+                  handleUpdateSettings({
+                    device_id: Number(devId), device_name: dev?.name,
+                    device_hostapi: dev?.hostapi,
+                    device_max_input_channels: dev?.max_input_channels,
+                    device_default_samplerate: dev?.default_samplerate,
+                    device_alsa_card_id: dev?.alsa_card_id ?? undefined,
+                    device_alsa_device: dev?.alsa_device ?? undefined,
+                  });
                 }}
               />
               {settings.source !== 'gnuradio' && (

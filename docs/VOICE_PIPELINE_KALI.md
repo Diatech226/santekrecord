@@ -86,3 +86,18 @@ seconds of the post-resampling/post-gain mono signal presented to the VAD is
 written to `data/debug/vad_input.wav`; its path, duration, 16 kHz sample rate,
 RMS, and peak are logged. The dump is disabled by default and is separate from
 normal archived recordings.
+# USB AUDIO HOT-PLUG / RECONNECT
+
+1. Start monitoring.
+2. Speak and verify that REC works.
+3. Unplug the USB sound card.
+4. Observe `DEVICE DISCONNECTED` then `RECONNECTING` in the UI.
+5. Plug the same card back in.
+6. In diagnostics, verify that `resolved_device_id` follows the new PortAudio ID.
+7. Verify that `LISTENING` resumes automatically.
+8. Speak again and verify that REC works.
+
+The refresh button and device selector become available as soon as telemetry says
+`engine_running=false`. Automatic reconnect scans every 1.5 seconds for up to 45
+seconds and matches the configured identity/name or ALSA `card_id`; it does not
+choose another microphone merely because the old numeric index was reused.

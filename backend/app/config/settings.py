@@ -20,6 +20,11 @@ class AppConfig(BaseModel):
     device_name: Optional[str] = Field(
         default=None, description="Friendly device label used to recover a stale index"
     )
+    device_hostapi: Optional[str] = None
+    device_max_input_channels: Optional[int] = None
+    device_default_samplerate: Optional[int] = None
+    device_alsa_card_id: Optional[str] = None
+    device_alsa_device: Optional[int] = None
     audio_backend: Literal["auto", "portaudio", "alsa"] = Field(default="auto")
     sample_rate: int = Field(
         default=16000, description="Sampling rate in Hz (standard 16000 for VAD and Whisper)"

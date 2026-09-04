@@ -47,11 +47,22 @@ def list_alsa_devices() -> list[ALSADevice]:
     return parse_arecord_devices(probe.stdout)
 
 
-def match_alsa_device(portaudio_name: str) -> Optional[ALSADevice]:
+def match_alsa_device(portaudio_name: str, card_id: Optional[str] = None,
+                      device_number: Optional[int] = None) -> Optional[ALSADevice]:
     """Return a mapping only when exactly one ALSA capture device matches by name/card id."""
+    devices = list_alsa_devices()
+    if card_id:
+        exact = [d for d in devices if d.card_id.casefold() == card_id.casefold()
+                 and (device_number is None or d.device == device_number)]
+        return exact[0] if len(exact) == 1 else None
+    exact_names = [d for d in devices if d.name.casefold() == portaudio_name.casefold()]
+    if len(exact_names) == 1:
+        return exact_names[0]
+    if len(exact_names) > 1:
+        return None
     tokens = {t for t in re.findall(r"[a-z0-9]+", portaudio_name.lower()) if len(t) >= 3}
     scored = []
-    for device in list_alsa_devices():
+    for device in devices:
         haystack = f"{device.card_id} {device.name}".lower()
         score = len(tokens.intersection(re.findall(r"[a-z0-9]+", haystack)))
         if score:

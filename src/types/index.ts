@@ -19,6 +19,9 @@ export type EngineStatus =
   | 'transmission_hangover'
   | 'waiting_reply'
   | 'saving_communication'
+  | 'device_disconnected'
+  | 'reconnecting'
+  | 'reconnect_failed'
   | 'error';
 
 export interface AudioDevice {
@@ -31,6 +34,8 @@ export interface AudioDevice {
   type: 'microphone' | 'usb' | 'line' | 'other';
   available?: boolean;
   device_kind?: 'hardware' | 'virtual' | 'default';
+  alsa_card_id?: string | null;
+  alsa_device?: number | null;
 }
 
 export interface AudioDiagnostics {
@@ -82,6 +87,11 @@ export interface AppSettings {
   source: AudioSourceType;
   device_id: number | string | null;
   device_name?: string;
+  device_hostapi?: string;
+  device_max_input_channels?: number;
+  device_default_samplerate?: number;
+  device_alsa_card_id?: string;
+  device_alsa_device?: number;
   audio_backend?: 'auto' | 'portaudio' | 'alsa';
   sample_rate: number;
   preroll_seconds: number;
@@ -133,6 +143,15 @@ export interface MonitorUpdate {
   voice_detected: boolean;
   recording: boolean;
   status: EngineStatus;
+  engine_running?: boolean;
+  device_reconnecting?: boolean;
+  reconnect_attempt?: number;
+  reconnect_elapsed_seconds?: number;
+  configured_device_id?: number | null;
+  resolved_device_id?: number | null;
+  configured_device_name?: string | null;
+  resolved_device_name?: string | null;
+  device_identity_match?: boolean;
   current_duration_sec?: number;
   peak_dbfs?: number;
   rms_dbfs?: number;

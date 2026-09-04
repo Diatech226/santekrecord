@@ -449,3 +449,16 @@ Repeat with the `radio_room` profile: reset the ambient profile, start monitorin
 open the talkie, speak the first word strongly, then continue normally or more
 softly. Expected: one radio transmission; speech and radio activity may remain
 true after VAD falls below `0.75`.
+# USB AUDIO HOT-PLUG / RECONNECT
+
+PortAudio indices are volatile. SantekRecord persists the selected input's name,
+host API, channel/rate properties and ALSA card identity, then re-enumerates and
+resolves that identity before every open. If frames stop for two seconds, the
+current recording is finalized, the UI receives `device_disconnected`, and the
+backend retries the same physical device for 45 seconds (including when its index
+changes). It never silently falls back to an internal microphone.
+
+Kali field check: start monitoring; speak and confirm REC; unplug the USB card;
+observe **DEVICE DISCONNECTED / RECONNECTING**; reconnect the same card; confirm
+LISTENING returns; speak again and confirm REC. No browser, FastAPI, or Kali
+restart should be required.

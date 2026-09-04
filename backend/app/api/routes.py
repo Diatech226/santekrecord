@@ -472,7 +472,20 @@ def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
     """Capture a selected real PortAudio input and return measurable signal data."""
     if engine._is_running:
         raise HTTPException(status_code=409, detail="Stop monitoring before testing an input")
-    source = MicrophoneSource(device_id=request.device_id, sample_rate=engine.config.sample_rate,
+    requested_id = request.device_id
+    # A browser may still hold the pre-hot-plug index. Resolve the persisted
+    # physical identity against a fresh PortAudio enumeration before testing.
+    if requested_id == engine.config.device_id and engine.config.device_name:
+        from ..audio.device_resolver import AudioDeviceIdentity, resolve_configured_device
+        identity = AudioDeviceIdentity(
+            engine.config.device_name, engine.config.device_hostapi or "",
+            engine.config.device_max_input_channels, engine.config.device_default_samplerate,
+            engine.config.device_alsa_card_id, engine.config.device_alsa_device)
+        resolved, _ = resolve_configured_device(MicrophoneSource.list_devices(), requested_id, identity)
+        if resolved is None:
+            raise HTTPException(status_code=422, detail="Configured audio device is not connected")
+        requested_id = int(resolved["id"])
+    source = MicrophoneSource(device_id=requested_id, sample_rate=engine.config.sample_rate,
                               input_channel=engine.config.input_channel)
     frames = 0
     sum_squares = 0.0
@@ -504,7 +517,7 @@ def test_input_json(request: InputTestRequest, engine=Depends(get_engine)):
     rms = float(np.sqrt(sum_squares / frames)) if frames else 0.0
     return {
         "success": frames > 0,
-        "device_id": request.device_id,
+        "device_id": requested_id,
         "device_name": source.device_name,
         "native_samplerate": source.capture_sample_rate,
         "channels": source.capture_channels,
