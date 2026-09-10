@@ -26,7 +26,8 @@ const isMonitorSocketUrl = (url: string | URL) => {
  * This narrow guard applies only to /ws/monitor. It reports transport state to
  * the shell, suppresses the legacy `onerror` property handler for that socket,
  * and leaves `onclose` untouched so the existing monitoring reconnect loop can
- * still run.
+ * still run. A Proxy is used instead of subclassing the native WebSocket for
+ * broader browser compatibility.
  */
 export const installMonitorSocketGuard = () => {
   if (typeof window === 'undefined') return;
@@ -37,26 +38,26 @@ export const installMonitorSocketGuard = () => {
   guardedWindow.__santekMonitorSocketGuardInstalled = true;
 
   const NativeWebSocket = window.WebSocket;
+  const MonitorSafeWebSocket = new Proxy(NativeWebSocket, {
+    construct(Target, args) {
+      const socket = Reflect.construct(Target, args, Target) as WebSocket;
+      const [url] = args as [string | URL];
+      if (!isMonitorSocketUrl(url)) return socket;
 
-  class MonitorSafeWebSocket extends NativeWebSocket {
-    constructor(url: string | URL, protocols?: string | string[]) {
-      super(url, protocols as string | string[] | undefined);
-      if (!isMonitorSocketUrl(url)) return;
-
-      this.addEventListener('open', () => emitBackendTransport('online'));
-      this.addEventListener('message', () => emitBackendTransport('online'));
-      this.addEventListener('error', (event) => {
+      socket.addEventListener('open', () => emitBackendTransport('online'));
+      socket.addEventListener('message', () => emitBackendTransport('online'));
+      socket.addEventListener('error', (event) => {
         emitBackendTransport('offline');
-        // This listener is registered before App.tsx assigns socket.onerror.
-        // Stop only the monitor transport error so it cannot become a global
-        // functional-error banner. `close` still propagates for reconnect logic.
+        // Registered before App.tsx assigns socket.onerror. Prevent only this
+        // monitor transport error from becoming a global functional-error UI.
+        // The close event still propagates normally for reconnect behavior.
         event.stopImmediatePropagation();
       });
 
       // Extra protection for browsers that dispatch the IDL onerror handler
       // independently from EventTarget listener ordering.
       try {
-        Object.defineProperty(this, 'onerror', {
+        Object.defineProperty(socket, 'onerror', {
           configurable: true,
           enumerable: true,
           get: () => null,
@@ -65,8 +66,9 @@ export const installMonitorSocketGuard = () => {
       } catch {
         // stopImmediatePropagation above remains the fallback.
       }
-    }
-  }
+      return socket;
+    },
+  });
 
   window.WebSocket = MonitorSafeWebSocket as typeof WebSocket;
 };
