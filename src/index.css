@@ -43,8 +43,23 @@
   color-scheme: light;
 }
 
+/* Keep the dashboard app-like on touch devices. Pulling down at scroll top
+   must not trigger a browser refresh that tears down the local WebSocket. */
+html,
+body,
+#root {
+  min-height: 100%;
+  overscroll-behavior-y: none;
+}
+
+html {
+  background-color: var(--bg-page);
+}
+
 /* Custom transitions and helper classes */
 body {
+  min-height: 100vh;
+  margin: 0;
   background-color: var(--bg-page);
   color: var(--text-primary);
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
