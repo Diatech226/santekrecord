@@ -18,10 +18,10 @@ const isMonitorSocketUrl = (url: string | URL) => {
 };
 
 /**
- * The dashboard historically promoted WebSocket transport failures to its
- * global functional error banner. On the desktop app, a local backend restart,
- * a temporary network interruption, or a browser refresh must not replace the
- * usable dashboard with a WebSocket error.
+ * The desktop dashboard historically promoted WebSocket transport failures to
+ * its global functional error banner. A local backend restart, a temporary PC
+ * network interruption, or a browser refresh must not replace the usable
+ * dashboard with a WebSocket error.
  *
  * This narrow guard applies only to /ws/monitor. It reports transport state to
  * the shell, suppresses the legacy `onerror` property handler for that socket,
