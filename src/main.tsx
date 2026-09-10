@@ -53,11 +53,11 @@ function BackendConnectivityNotice() {
       id="backend-connectivity-notice"
       role="status"
       aria-live="polite"
-      className="fixed z-[100] bottom-4 left-4 right-4 sm:left-auto sm:max-w-md rounded-lg border border-amber-500/40 bg-[#151619]/95 p-3 shadow-xl backdrop-blur font-mono text-xs text-amber-400"
+      className="fixed z-[100] bottom-4 right-4 w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-amber-500/40 bg-[#151619]/95 p-3 shadow-xl backdrop-blur font-mono text-xs text-amber-400"
     >
       <div className="font-bold uppercase">Backend local temporairement indisponible</div>
       <div className="mt-1 text-[10px] text-[#A0A0A0]">
-        L’interface reste utilisable. La reconnexion se fait automatiquement sans afficher une erreur WebSocket bloquante.
+        Le tableau de bord reste ouvert sur ce PC. La connexion au backend local sera retestée automatiquement sans afficher une erreur WebSocket bloquante.
       </div>
       <button
         type="button"
