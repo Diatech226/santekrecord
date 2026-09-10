@@ -11,8 +11,6 @@ import {
 } from './services/monitorSocketGuard';
 import './index.css';
 
-// Install before React effects create /ws/monitor. The guard is deliberately
-// limited to the monitor socket and does not alter other WebSocket consumers.
 installMonitorSocketGuard();
 
 function BackendConnectivityNotice() {
@@ -57,7 +55,7 @@ function BackendConnectivityNotice() {
     >
       <div className="font-bold uppercase">Backend local temporairement indisponible</div>
       <div className="mt-1 text-[10px] text-[#A0A0A0]">
-        Le tableau de bord reste ouvert sur ce PC. La connexion au backend local sera retestée automatiquement sans afficher une erreur WebSocket bloquante.
+        Le tableau de bord reste ouvert sur ce PC. La connexion au backend local est retestée automatiquement sans afficher une erreur WebSocket bloquante.
       </div>
       <button
         type="button"
