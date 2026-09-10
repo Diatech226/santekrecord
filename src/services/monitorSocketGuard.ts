@@ -45,11 +45,16 @@ export const installMonitorSocketGuard = () => {
 
       this.addEventListener('open', () => emitBackendTransport('online'));
       this.addEventListener('message', () => emitBackendTransport('online'));
-      this.addEventListener('error', () => emitBackendTransport('offline'));
+      this.addEventListener('error', (event) => {
+        emitBackendTransport('offline');
+        // This listener is registered before App.tsx assigns socket.onerror.
+        // Stop only the monitor transport error so it cannot become a global
+        // functional-error banner. `close` still propagates for reconnect logic.
+        event.stopImmediatePropagation();
+      });
 
-      // App.tsx currently assigns socket.onerror only to display a red transport
-      // error. Keep native addEventListener('error', ...) available, but swallow
-      // this one legacy property assignment for the monitor socket.
+      // Extra protection for browsers that dispatch the IDL onerror handler
+      // independently from EventTarget listener ordering.
       try {
         Object.defineProperty(this, 'onerror', {
           configurable: true,
@@ -58,8 +63,7 @@ export const installMonitorSocketGuard = () => {
           set: () => undefined,
         });
       } catch {
-        // If a browser does not allow shadowing the IDL property, the transport
-        // state still works and the CSS pull-to-refresh fix remains effective.
+        // stopImmediatePropagation above remains the fallback.
       }
     }
   }
