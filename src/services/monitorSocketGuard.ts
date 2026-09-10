@@ -30,10 +30,11 @@ const isMonitorSocketUrl = (url: string | URL) => {
  */
 export const installMonitorSocketGuard = () => {
   if (typeof window === 'undefined') return;
-  const marker = '__santekMonitorSocketGuardInstalled';
-  const guardedWindow = window as Window & Record<string, unknown>;
-  if (guardedWindow[marker]) return;
-  guardedWindow[marker] = true;
+  const guardedWindow = window as Window & {
+    __santekMonitorSocketGuardInstalled?: boolean;
+  };
+  if (guardedWindow.__santekMonitorSocketGuardInstalled) return;
+  guardedWindow.__santekMonitorSocketGuardInstalled = true;
 
   const NativeWebSocket = window.WebSocket;
 
