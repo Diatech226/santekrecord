@@ -43,11 +43,30 @@
   color-scheme: light;
 }
 
-/* Custom transitions and helper classes */
+/* Desktop dashboard must always remain vertically scrollable. */
+html {
+  min-height: 100%;
+  height: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 body {
+  min-height: 100vh;
+  height: auto;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: visible;
   background-color: var(--bg-page);
   color: var(--text-primary);
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+#root {
+  min-height: 100vh;
+  height: auto;
+  overflow: visible;
 }
 
 /* Light Theme Component Adaptations */
