@@ -17,7 +17,14 @@ const isMonitorSocketUrl = (url: string | URL) => {
   }
 };
 
-/** Desktop-only resilience for the local monitoring WebSocket. */
+/**
+ * Desktop resilience for the local monitoring WebSocket.
+ *
+ * Internet connectivity is intentionally irrelevant: SantekRecord is designed
+ * to run fully offline on one PC. This guard only tracks reachability of the
+ * local /ws/monitor endpoint and prevents a transport failure from becoming a
+ * global red functional-error banner.
+ */
 export const installMonitorSocketGuard = () => {
   if (typeof window === 'undefined') return;
   const guardedWindow = window as Window & {
@@ -37,6 +44,8 @@ export const installMonitorSocketGuard = () => {
       socket.addEventListener('message', () => emitBackendTransport('online'));
       socket.addEventListener('error', (event) => {
         emitBackendTransport('offline');
+        // This is a local transport problem, not a functional application error.
+        // Keep onclose available so the existing reconnect lifecycle can run.
         event.stopImmediatePropagation();
       });
 
@@ -62,6 +71,8 @@ export const probeLocalBackend = async (timeoutMs = 1800): Promise<boolean> => {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
+    // Deliberately probes only the service running on this PC/LAN host. This
+    // fetch continues to work when the machine has no Internet connection.
     const origin = `${window.location.protocol}//${window.location.hostname}:8000`;
     const response = await fetch(`${origin}/api/health`, {
       cache: 'no-store',
