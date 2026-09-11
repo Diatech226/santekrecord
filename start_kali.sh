@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Auto Voice Recorder - Kali Linux Startup Script
+# Auto Voice Recorder - Kali Linux OFFLINE runtime launcher
 # ==============================================================================
 
 set -e
@@ -8,50 +8,94 @@ set -e
 # Always operate from the repository, even when launched from another directory.
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
-echo "=== Auto Voice Recorder (Kali Linux) ==="
+echo "=== Auto Voice Recorder (Kali Linux - offline runtime) ==="
 
-# 1. Install the complete runtime instead of assuming that the presence of
-# python3 means ALSA/PortAudio headers and venv support are also installed.
-SYSTEM_PACKAGES=(python3 python3-dev python3-venv python3-pip alsa-utils portaudio19-dev libportaudio2 ffmpeg nodejs npm)
+# Runtime startup must never depend on Internet access. Installation and model
+# downloads belong to setup_kali.sh, which is run once while online.
+# Only packages needed at runtime are checked here; development headers/pip are
+# intentionally left to setup_kali.sh.
+RUNTIME_PACKAGES=(python3 alsa-utils libportaudio2 ffmpeg nodejs npm)
 MISSING_PACKAGES=()
-for package in "${SYSTEM_PACKAGES[@]}"; do
+for package in "${RUNTIME_PACKAGES[@]}"; do
     dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed" || MISSING_PACKAGES+=("$package")
 done
 if ((${#MISSING_PACKAGES[@]})); then
-    echo "[*] Installing missing Kali packages: ${MISSING_PACKAGES[*]}"
-    sudo apt update
-    sudo apt install -y "${MISSING_PACKAGES[@]}"
+    echo "[ERROR] Missing runtime packages: ${MISSING_PACKAGES[*]}"
+    echo "[ERROR] Run ./setup_kali.sh once while Internet access is available."
+    exit 1
 fi
 
-# 3. Create & Activate Python Virtual Environment
 if [ ! -d ".venv" ]; then
-    echo "[*] Creating Python virtual environment in .venv..."
-    python3 -m venv .venv
+    echo "[ERROR] Python virtual environment .venv is missing."
+    echo "[ERROR] Run ./setup_kali.sh once while Internet access is available."
+    exit 1
 fi
 
-echo "[*] Activating virtual environment..."
 source .venv/bin/activate
 
-echo "[*] Installing Python dependencies..."
-pip install --upgrade pip
-pip install -r backend/requirements.txt
+# Validate only the dependencies required to start the local app. Optional ML
+# packages must not block a machine that can already run the ONNX voice path.
+if ! python3 - <<'PYDEPS'
+import importlib
+import sys
 
-# Validate on every startup; a non-empty file is not necessarily an ONNX model.
-echo "[*] Checking pinned Silero VAD ONNX model..."
-if python3 scripts/install_silero_vad.py; then
-    echo "[OK] Silero VAD installed"
-else
-    echo "[WARN] Silero installation failed"
-    echo "[WARN] Starting with acoustic fallback"
+required = [
+    "fastapi",
+    "uvicorn",
+    "sounddevice",
+    "numpy",
+    "soundfile",
+    "pydantic",
+    "websockets",
+    "multipart",
+    "aiofiles",
+    "scipy",
+]
+missing = []
+for module in required:
+    try:
+        importlib.import_module(module)
+    except Exception as exc:
+        missing.append(f"{module} ({type(exc).__name__}: {exc})")
+
+if missing:
+    print("[ERROR] Missing/broken required Python dependencies:")
+    for item in missing:
+        print(f"  - {item}")
+    sys.exit(1)
+print("[OK] Required Python runtime dependencies are available locally")
+PYDEPS
+then
+    echo "[ERROR] Python runtime is incomplete."
+    echo "[ERROR] Run ./setup_kali.sh once while Internet access is available."
+    exit 1
 fi
 
-# 4. Install Node.js dependencies
 if [ ! -d "node_modules" ]; then
-    echo "[*] Installing Frontend / Node dependencies..."
-    npm install
+    echo "[ERROR] node_modules is missing."
+    echo "[ERROR] Run ./setup_kali.sh once while Internet access is available."
+    exit 1
 fi
 
-# 5. Create FIFO for GNU Radio HackRF if not present
+# Validate the local Silero model only. Never download during normal startup.
+if python3 - <<'PYSILERO'
+from pathlib import Path
+from scripts.install_silero_vad import validate_model
+
+path = Path("backend/models/silero_vad.onnx")
+valid, diagnostic = validate_model(path)
+print(("[OK] " if valid else "[WARN] ") + diagnostic)
+raise SystemExit(0 if valid else 1)
+PYSILERO
+then
+    echo "[OK] Silero VAD local model ready"
+else
+    echo "[WARN] Silero local model or onnxruntime is unavailable."
+    echo "[WARN] The app will start with its local acoustic fallback; voice detection may be less accurate."
+    echo "[WARN] Run ./setup_kali.sh later with Internet access to install/repair Silero."
+fi
+
+# Create FIFO for GNU Radio HackRF if not present.
 if [ -e "/tmp/hackrf_audio.f32" ] && [ ! -p "/tmp/hackrf_audio.f32" ]; then
     echo "[!] Removing non-FIFO file at /tmp/hackrf_audio.f32"
     rm -f /tmp/hackrf_audio.f32
@@ -71,7 +115,7 @@ inputs = [(i, d['name']) for i, d in enumerate(sd.query_devices()) if d['max_inp
 print(inputs if inputs else 'No PortAudio inputs visible')
 PYPORTAUDIO
 
-# 6. Launch Backend & Frontend
+# Launch local backend and frontend. Neither service requires Internet access.
 echo "[*] Starting FastAPI Backend on http://127.0.0.1:8000 ..."
 python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
@@ -84,7 +128,8 @@ trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true; exit" INT TERM EXIT
 
 echo ""
 echo "=========================================================="
-echo ">> Auto Voice Recorder is running!"
+echo ">> Auto Voice Recorder is running OFFLINE."
+echo ">> Internet access is NOT required."
 echo ">> Web UI:  http://127.0.0.1:3000"
 echo ">> API:     http://127.0.0.1:8000"
 echo ">> Press Ctrl+C to stop all services."

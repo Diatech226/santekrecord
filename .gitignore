@@ -30,3 +30,7 @@ data/debug/*
 # Ambient runtime profiles
 data/ambient_profiles/*
 !data/ambient_profiles/.gitkeep
+
+# Local Silero model installed by setup_kali.sh
+backend/models/silero_vad.onnx
+backend/models/silero_vad.onnx.part
