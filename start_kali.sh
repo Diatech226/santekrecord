@@ -31,12 +31,13 @@ fi
 
 source .venv/bin/activate
 
-# Validate already-installed Python runtime without invoking pip/network.
+# Validate only the dependencies required to start the local app. Optional ML
+# packages must not block a machine that can already run the ONNX voice path.
 if ! python3 - <<'PYDEPS'
 import importlib
 import sys
 
-modules = [
+required = [
     "fastapi",
     "uvicorn",
     "sounddevice",
@@ -44,26 +45,23 @@ modules = [
     "soundfile",
     "pydantic",
     "websockets",
-    "torch",
-    "torchaudio",
-    "onnxruntime",
     "multipart",
     "aiofiles",
     "scipy",
 ]
 missing = []
-for module in modules:
+for module in required:
     try:
         importlib.import_module(module)
     except Exception as exc:
         missing.append(f"{module} ({type(exc).__name__}: {exc})")
 
 if missing:
-    print("[ERROR] Missing/broken Python dependencies:")
+    print("[ERROR] Missing/broken required Python dependencies:")
     for item in missing:
         print(f"  - {item}")
     sys.exit(1)
-print("[OK] Python runtime dependencies are available locally")
+print("[OK] Required Python runtime dependencies are available locally")
 PYDEPS
 then
     echo "[ERROR] Python runtime is incomplete."
@@ -90,8 +88,8 @@ PYSILERO
 then
     echo "[OK] Silero VAD local model ready"
 else
-    echo "[WARN] Silero local model is unavailable or invalid."
-    echo "[WARN] The app will start with its acoustic fallback; voice detection may be less accurate."
+    echo "[WARN] Silero local model or onnxruntime is unavailable."
+    echo "[WARN] The app will start with its local acoustic fallback; voice detection may be less accurate."
     echo "[WARN] Run ./setup_kali.sh later with Internet access to install/repair Silero."
 fi
 
