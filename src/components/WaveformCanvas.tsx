@@ -560,15 +560,17 @@ export const WaveformCanvas: React.FC<Props> = ({
     setIsDraggingSeek(false);
   };
 
-  // Wheel Zoom & Wheel Pan Handler
+  // Keep ordinary vertical wheel/trackpad gestures available to the page.
+  // Timeline gestures are opt-in: Ctrl/Cmd + wheel zooms, while Shift + wheel
+  // (or a genuinely horizontal trackpad gesture) pans.
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
 
     // Shift + Wheel or horizontal trackpad: Pan timeline
     if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       if (maxPanDuration > 0 && onPanChange) {
+        e.preventDefault();
         const delta = (e.deltaX || e.deltaY) * 0.0015;
         const newPan = Math.max(0, Math.min(1, clampedPan + delta));
         onPanChange(newPan);
@@ -576,8 +578,10 @@ export const WaveformCanvas: React.FC<Props> = ({
       return;
     }
 
-    // Vertical wheel: Zoom in/out centered around cursor
-    if (onZoomChange) {
+    // Require a modifier for vertical zoom so hovering this canvas can never
+    // trap the dashboard's primary vertical scroll.
+    if ((e.ctrlKey || e.metaKey) && onZoomChange) {
+      e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.25 : 0.8;
       const nextZoom = Math.max(1, Math.min(16, currentZoom * zoomFactor));
       
@@ -658,7 +662,7 @@ export const WaveformCanvas: React.FC<Props> = ({
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerLeave}
         onWheel={handleWheel}
-        title="Click/Drag to scrub · Scroll to Zoom · Shift+Scroll to Pan"
+        title="Click/Drag to scrub · Ctrl/Cmd+Scroll to Zoom · Shift+Scroll to Pan"
       >
         <canvas
           ref={canvasRef}
