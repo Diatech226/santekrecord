@@ -22,14 +22,15 @@ function BackendConnectivityNotice() {
       if (next) setState(next);
     };
     const probe = () => { void probeLocalBackend(); };
-    const handleOffline = () => setState('offline');
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') probe();
     };
 
+    // Important: do not use navigator.onLine or the browser online/offline
+    // events here. SantekRecord is designed to run fully offline on one PC;
+    // only the local FastAPI backend on port 8000 determines availability.
     window.addEventListener(BACKEND_TRANSPORT_EVENT, handleTransport as EventListener);
-    window.addEventListener('online', probe);
-    window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', probe);
     document.addEventListener('visibilitychange', handleVisibility);
 
     probe();
@@ -38,8 +39,7 @@ function BackendConnectivityNotice() {
     return () => {
       window.clearInterval(timer);
       window.removeEventListener(BACKEND_TRANSPORT_EVENT, handleTransport as EventListener);
-      window.removeEventListener('online', probe);
-      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', probe);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
@@ -53,9 +53,9 @@ function BackendConnectivityNotice() {
       aria-live="polite"
       className="fixed z-[100] bottom-4 right-4 w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-amber-500/40 bg-[#151619]/95 p-3 shadow-xl backdrop-blur font-mono text-xs text-amber-400"
     >
-      <div className="font-bold uppercase">Backend local temporairement indisponible</div>
+      <div className="font-bold uppercase">Service audio local indisponible</div>
       <div className="mt-1 text-[10px] text-[#A0A0A0]">
-        Le tableau de bord reste ouvert sur ce PC. La connexion au backend local est retestée automatiquement sans afficher une erreur WebSocket bloquante.
+        Aucune connexion Internet n’est nécessaire. Vérifie seulement que le backend local SantekRecord est lancé sur le port 8000 ; le tableau de bord le reteste automatiquement.
       </div>
       <button
         type="button"
@@ -65,7 +65,7 @@ function BackendConnectivityNotice() {
           void probeLocalBackend();
         }}
       >
-        Réessayer maintenant
+        Retester le backend local
       </button>
     </div>
   );
