@@ -12,13 +12,15 @@ echo "=== Auto Voice Recorder (Kali Linux - offline runtime) ==="
 
 # Runtime startup must never depend on Internet access. Installation and model
 # downloads belong to setup_kali.sh, which is run once while online.
-SYSTEM_PACKAGES=(python3 python3-dev python3-venv python3-pip alsa-utils portaudio19-dev libportaudio2 ffmpeg nodejs npm)
+# Only packages needed at runtime are checked here; development headers/pip are
+# intentionally left to setup_kali.sh.
+RUNTIME_PACKAGES=(python3 alsa-utils libportaudio2 ffmpeg nodejs npm)
 MISSING_PACKAGES=()
-for package in "${SYSTEM_PACKAGES[@]}"; do
+for package in "${RUNTIME_PACKAGES[@]}"; do
     dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed" || MISSING_PACKAGES+=("$package")
 done
 if ((${#MISSING_PACKAGES[@]})); then
-    echo "[ERROR] Missing system packages: ${MISSING_PACKAGES[*]}"
+    echo "[ERROR] Missing runtime packages: ${MISSING_PACKAGES[*]}"
     echo "[ERROR] Run ./setup_kali.sh once while Internet access is available."
     exit 1
 fi
