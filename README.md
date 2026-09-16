@@ -113,22 +113,41 @@ sudo pacman -S --needed python python-pip portaudio alsa-utils ffmpeg nodejs npm
 
 GNU Radio et HackRF ne sont nécessaires que pour utiliser une source radio. Installez-les avec le gestionnaire de paquets de votre distribution (`gnuradio` et `hackrf`).
 
-### Option 1 — Démarrage automatique sur Debian, Ubuntu ou Kali
+### Kali Linux — première installation
 
 Depuis la racine du dépôt :
 
 ```bash
-git clone <URL_DU_DEPOT>
+git clone https://github.com/Diatech226/santekrecord.git
 cd santekrecord
-chmod +x start_kali.sh
+chmod +x start_kali.sh setup_kali.sh
 ./start_kali.sh
 ```
 
-Le script utilise `apt` et `dpkg` : il est donc réservé aux distributions basées sur Debian. Il installe les paquets manquants, crée `.venv`, installe les dépendances Python et Node.js, prépare le FIFO GNU Radio, puis lance les deux services.
+`start_kali.sh` vérifie les paquets Kali, `.venv`, les modules Python et
+`node_modules`. Si un élément est absent ou cassé, il appelle automatiquement
+`setup_kali.sh`, qui installe/répare l'environnement avant de reprendre le
+démarrage. Le setup peut demander le mot de passe `sudo` et une connexion
+Internet lors de la première installation.
 
-Quand le message de confirmation apparaît, ouvrez **http://127.0.0.1:3000**. L'API FastAPI est disponible sur **http://127.0.0.1:8000**. Utilisez `Ctrl+C` dans le terminal pour arrêter les deux services.
+Le script refuse clairement de démarrer si les ports `3000` ou `8000` sont déjà
+occupés ; il ne tue jamais une autre application. Quand le message de
+confirmation apparaît, ouvrez **http://127.0.0.1:3000**. L'API FastAPI est
+disponible sur **http://127.0.0.1:8000**. `Ctrl+C` arrête proprement les deux
+services.
 
-### Option 2 — Démarrage manuel sur toute distribution Linux
+### Kali Linux — lancements suivants
+
+```bash
+./start_kali.sh
+```
+
+C'est la seule commande nécessaire. Si l'environnement local est valide, aucun
+paquet et aucun modèle ne sont téléchargés : le lancement reste entièrement
+hors ligne. Après un `git pull` qui modifie les dépendances, le script détecte
+également un environnement Node/Python incomplet et relance le setup si besoin.
+
+### Installation manuelle sur une autre distribution Linux
 
 Cette méthode est recommandée sur Fedora, Arch Linux, Manjaro et les autres distributions non basées sur Debian.
 
@@ -168,23 +187,6 @@ npm run dev
 ```
 
 Ouvrez ensuite **http://127.0.0.1:3000** dans votre navigateur. Le serveur Node écoute par défaut sur toutes les interfaces ; l'interface contacte le backend sur le port `8000` de la même machine.
-
-### Lancement après la première installation
-
-Il n'est pas nécessaire de réinstaller les dépendances à chaque démarrage. Lancez le backend dans un premier terminal :
-
-```bash
-cd santekrecord
-source .venv/bin/activate
-python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
-```
-
-Puis l'interface dans un second terminal :
-
-```bash
-cd santekrecord
-npm run dev
-```
 
 ### Build de production
 
