@@ -13,7 +13,42 @@ const sameIdentity = (device: AudioDevice, settings: AppSettings) => {
        device.alsa_device === settings.device_alsa_device);
   }
   return normalizeDeviceName(device.name) === normalizeDeviceName(settings.device_name ?? '') &&
-    (!settings.device_hostapi || device.hostapi === settings.device_hostapi);
+    (!settings.device_hostapi || device.hostapi === settings.device_hostapi) &&
+    (settings.device_max_input_channels === undefined ||
+      device.max_input_channels === settings.device_max_input_channels) &&
+    (settings.device_default_samplerate === undefined ||
+      device.default_samplerate === settings.device_default_samplerate) &&
+    (settings.device_alsa_device === undefined ||
+      device.alsa_device === settings.device_alsa_device);
+};
+
+/** Replace every persisted identity field when the user changes input family. */
+export const settingsForSelectedDevice = (
+  source: AppSettings['source'], selectedDevice?: AudioDevice,
+): Partial<AppSettings> => ({
+  source,
+  device_id: selectedDevice?.id ?? null,
+  device_name: selectedDevice?.name,
+  device_hostapi: selectedDevice?.hostapi,
+  device_max_input_channels: selectedDevice?.max_input_channels,
+  device_default_samplerate: selectedDevice?.default_samplerate,
+  device_alsa_card_id: selectedDevice?.alsa_card_id ?? undefined,
+  device_alsa_device: selectedDevice?.alsa_device ?? undefined,
+});
+
+export const selectDeviceForSource = (
+  devices: AudioDevice[], source: AppSettings['source'], currentDeviceId: number | string | null,
+): AudioDevice | undefined => {
+  const candidates = devices.filter((device) => {
+    if (source === 'microphone') return device.type !== 'usb' && device.type !== 'line';
+    if (source !== 'usb') return true;
+    const name = (device.name || '').toLowerCase();
+    return device.type === 'usb' || device.type === 'line' ||
+      ['usb', 'codec', 'sound', 'audio', 'dac'].some(token => name.includes(token));
+  });
+  const pool = candidates.length ? candidates : devices;
+  return pool.find(device => String(device.id) === String(currentDeviceId))
+    ?? pool.find(device => device.is_default) ?? pool[0];
 };
 
 export type EngineDisplayState = 'reconnecting' | 'active' | 'waiting' | 'ready';

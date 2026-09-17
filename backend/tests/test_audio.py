@@ -89,6 +89,14 @@ def test_auto_channel_avoids_stereo_phase_cancellation():
     assert np.allclose(source._queue.get_nowait(), [-1, -.5])
 
 
+def test_auto_channel_immediately_captures_signal_only_on_channel_2():
+    selector = StableChannelSelector("auto")
+    stereo = np.column_stack((np.zeros(1024), np.full(1024, .2))).astype(np.float32)
+    selected = selector.select(stereo)
+    assert selector.selected_channel == "channel_2"
+    assert np.allclose(selected, .2)
+
+
 def test_audio_processing_settings_are_persisted():
     config = AppConfig(input_gain=2.5, input_channel="channel_2", auto_gain_control=True)
     assert config.input_gain == 2.5

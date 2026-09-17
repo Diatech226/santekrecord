@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AppSettings, AudioDevice } from '../types';
-import { getEngineDisplayState, normalizeDeviceName, reconcileSelectedDevice } from './deviceReconciliation';
+import { getEngineDisplayState, normalizeDeviceName, reconcileSelectedDevice, selectDeviceForSource, settingsForSelectedDevice } from './deviceReconciliation';
 
 const configured: AppSettings = {
   source: 'usb', device_id: 8, device_name: 'USB Audio CODEC',
@@ -65,4 +65,33 @@ test('engine display state gives reconnecting highest priority', () => {
   assert.equal(getEngineDisplayState(false, true, true), 'active');
   assert.equal(getEngineDisplayState(false, false, true), 'waiting');
   assert.equal(getEngineDisplayState(false, false, false), 'ready');
+});
+
+test('microphone to USB replaces the complete physical identity', () => {
+  const selected = selectDeviceForSource(
+    [device(1, 'Built-in Mic', 'PCH'), device(9, 'USB Audio CODEC', 'CODEC')], 'usb', 1);
+  const update = settingsForSelectedDevice('usb', selected);
+  assert.deepEqual(update, {
+    source: 'usb', device_id: 9, device_name: 'USB Audio CODEC', device_hostapi: 'ALSA',
+    device_max_input_channels: 2, device_default_samplerate: 48000,
+    device_alsa_card_id: 'CODEC', device_alsa_device: 0,
+  });
+});
+
+test('USB to microphone replaces stale ALSA identity', () => {
+  const selected = selectDeviceForSource(
+    [device(1, 'Built-in Mic', 'PCH'), device(9, 'USB Audio CODEC', 'CODEC')], 'microphone', 9);
+  const update = settingsForSelectedDevice('microphone', selected);
+  assert.equal(update.device_name, 'Built-in Mic');
+  assert.equal(update.device_alsa_card_id, 'PCH');
+  assert.notEqual(update.device_alsa_card_id, configured.device_alsa_card_id);
+});
+
+test('missing selection clears every old device identity field', () => {
+  assert.deepEqual(settingsForSelectedDevice('microphone'), {
+    source: 'microphone', device_id: null, device_name: undefined,
+    device_hostapi: undefined, device_max_input_channels: undefined,
+    device_default_samplerate: undefined, device_alsa_card_id: undefined,
+    device_alsa_device: undefined,
+  });
 });
