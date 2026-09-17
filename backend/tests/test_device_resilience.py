@@ -328,6 +328,28 @@ def test_alsa_prefers_stable_card_id_and_remaps_card_number():
         assert match_alsa_device("irrelevant old name", "CODEC", 0).identifier == "plughw:3,0"
 
 
+def test_open_portaudio_without_callbacks_tries_alsa_then_reports_frames(tmp_path):
+    engine = MainAudioEngine(AppConfig(device_id=8, device_name="USB", audio_backend="auto"),
+                             str(tmp_path))
+
+    class OpenButSilent:
+        device_name = "USB"
+        is_active = True
+        callback_count = 0
+        callback_frames = 0
+        def start(self): pass
+        def verify_audio_stream(self): return False
+        def stop(self): self.is_active = False
+
+    source = OpenButSilent()
+    with patch.object(engine, "_resolve_capture_device"), \
+            patch.object(engine, "_create_source", return_value=source), \
+            patch.object(engine, "_try_alsa_fallback", return_value=None) as fallback:
+        assert engine.start() is False
+    fallback.assert_called_once_with(source)
+    assert "no audio frames were received" in engine.current_error.lower()
+
+
 def test_alsa_ambiguous_name_is_not_guessed():
     devices = [ALSADevice(2, 0, "A", "USB Audio"), ALSADevice(3, 0, "B", "USB Audio")]
     with patch("backend.app.audio.alsa.list_alsa_devices", return_value=devices):

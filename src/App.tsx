@@ -8,7 +8,7 @@ import {
   RecordingMeta,
 } from './types';
 import { api } from './services/api';
-import { getEngineDisplayState, reconcileSelectedDevice } from './services/deviceReconciliation';
+import { getEngineDisplayState, reconcileSelectedDevice, selectDeviceForSource, settingsForSelectedDevice } from './services/deviceReconciliation';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AudioMeter } from './components/AudioMeter';
 import { SourceSelector } from './components/SourceSelector';
@@ -413,35 +413,10 @@ export default function App() {
       return;
     }
 
-    const candidateDevices = devices.filter((device) => {
-      if (source === 'usb') {
-        const nameLower = (device.name || '').toLowerCase();
-        return (
-          device.type === 'usb' ||
-          device.type === 'line' ||
-          nameLower.includes('usb') ||
-          nameLower.includes('codec') ||
-          nameLower.includes('sound') ||
-          nameLower.includes('audio') ||
-          nameLower.includes('dac')
-        );
-      }
-      return true;
-    });
-
-    const pool = candidateDevices.length > 0 ? candidateDevices : devices;
-    const selectedStillVisible = pool.find(
-      (device) => String(device.id) === String(settings.device_id)
-    );
-    const selectedDevice = selectedStillVisible ?? pool.find((device) => device.is_default)
-      ?? pool[0];
+    const selectedDevice = selectDeviceForSource(devices, source, settings.device_id);
 
     // Persist source and device together.
-    void applyManualDeviceOverride({
-      source,
-      device_id: selectedDevice?.id ?? null,
-      device_name: selectedDevice?.name,
-    });
+    void applyManualDeviceOverride(settingsForSelectedDevice(source, selectedDevice));
   };
 
   const handleDeleteRecording = async (id: string) => {

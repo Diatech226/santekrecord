@@ -51,6 +51,12 @@ class StableChannelSelector:
             other = 1 - self.selected_index
             if self._locked:
                 self._locked -= 1
+            elif (self.channel_rms_dbfs[self.selected_index] <= -85.0
+                  and self.channel_rms_dbfs[other] >= -65.0):
+                # Do not spend six analysis blocks on an electrically silent
+                # channel when the other input already carries a clear signal.
+                self.selected_index, self._challenger_hits = other, 0
+                self._locked = self.lock_blocks
             elif scores[other] >= scores[self.selected_index] + 3.0:
                 self._challenger_hits += 1
                 if self._challenger_hits >= self.switch_blocks:

@@ -90,19 +90,28 @@ export const api = {
 
   async saveSettings(settings: AppSettings): Promise<AppSettings> {
     localStorage.setItem('auto_recorder_settings', JSON.stringify(settings));
+    let res: Response;
     try {
-      const res = await fetch(`${API_BASE}/settings`, {
+      res = await fetch(`${API_BASE}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
       });
-      if (res.ok) {
-        return await res.json();
-      }
     } catch {
-      // saved to localstorage
+      // The backend is unreachable: offline mode intentionally keeps the local copy.
+      return settings;
     }
-    return settings;
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        detail = body.detail ?? body.error ?? detail;
+      } catch {
+        // Keep the HTTP status when the backend did not return JSON.
+      }
+      throw new Error(`Settings saved locally but rejected by FastAPI: ${detail}`);
+    }
+    return await res.json();
   },
 
   async startMonitoring(settings?: AppSettings): Promise<{ success: boolean; message: string }> {
