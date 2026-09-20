@@ -37,10 +37,30 @@ test('modals and the offline notice do not leave the document scroll locked', ()
   const sources = files.map(read).join('\n');
 
   assert.doesNotMatch(sources, /document\.body\.style\.overflow/);
+  assert.doesNotMatch(sources, /(?:window\.)?scrollTo\s*\(/);
+  assert.doesNotMatch(sources, /scrollIntoView\s*\(/);
   assert.doesNotMatch(sources, /(?:window\.)?location\.(?:reload|href)/);
 
   const notice = read('./main.tsx');
   assert.match(notice, /id="backend-connectivity-notice"/);
+  assert.match(notice, /id="backend-connectivity-notice"[^>]*[\s\S]*?className="[^"]*\bfixed\b[^"]*\bbottom-4\b[^"]*\bright-4\b/);
   assert.doesNotMatch(notice, /id="backend-connectivity-notice"[^>]*className="[^"]*\binset-0\b/);
+  assert.doesNotMatch(notice, /(?:autoFocus|\.focus\s*\()/);
   assert.doesNotMatch(notice, /navigator\.onLine\s*[;)]/);
+});
+
+test('offline polling preserves state identity and cannot replace the document scroller', () => {
+  const app = read('./App.tsx');
+  const css = read('./index.css');
+
+  assert.match(app, /if \(settingsAreEqual\(next, current\)\) return current;/);
+  assert.match(app, /id="connection-status-banners"[^>]*min-h-\[4\.25rem\]/);
+  assert.match(app, /id="soundcard-status-slot"[^>]*min-h-\[5\.25rem\]/);
+  assert.doesNotMatch(css, /(?:html|body|#root)\s*{[^}]*(?:overflow:\s*hidden|(?<!min-)height:\s*100vh|position:\s*fixed)/s);
+  assert.doesNotMatch(app, /className="[^"]*(?:^|\s)h-screen(?:\s|$)[^"]*"/);
+});
+
+test('the main interface no longer exposes input testing', () => {
+  const app = read('./App.tsx');
+  assert.doesNotMatch(app, /testInput|testResult|isTestingInput|Test Input|Testing input|No audio data received/);
 });
