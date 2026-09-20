@@ -4,7 +4,6 @@ const backendOrigin = typeof window === 'undefined'
   ? 'http://127.0.0.1:8000'
   : `${window.location.protocol}//${window.location.hostname}:8000`;
 const API_BASE = `${backendOrigin}/api`;
-const INPUT_TEST_TIMEOUT_MS = 8_000;
 
 export const api = {
   async getHealth(): Promise<{ status: string; engine: string; timestamp: string }> {
@@ -128,51 +127,6 @@ export const api = {
       return await res.json();
     } catch (error) {
       throw error instanceof Error ? error : new Error('Unable to start audio backend');
-    }
-  },
-
-  async testInput(deviceId: number | string | null, source = 'microphone'): Promise<{ working: boolean; message: string; level_dbfs: number; peak_dbfs: number; frames_received: number; capture_sample_rate?: number }> {
-    if (source !== 'gnuradio') {
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), INPUT_TEST_TIMEOUT_MS);
-      try {
-        const numericId = deviceId === null ? null : Number(deviceId);
-        const res = await fetch(`${API_BASE}/audio/test-input`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-          body: JSON.stringify({ device_id: Number.isFinite(numericId) ? numericId : null }),
-        });
-        if (!res.ok) {
-          const body = await res.json();
-          const detail = body.detail?.error ?? body.detail ?? `HTTP ${res.status}`;
-          throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-        }
-        const result = await res.json();
-        return { ...result, working: result.success, message: result.success ? 'Input working' : result.error,
-          capture_sample_rate: result.native_samplerate };
-      } catch (error) {
-        if (controller.signal.aborted) throw new Error('Input test timed out. Check the device and try again.');
-        throw error;
-      } finally { window.clearTimeout(timeoutId); }
-    }
-    const params = new URLSearchParams({ source_type: source });
-    if (deviceId !== null) params.set('device_id', String(deviceId));
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), INPUT_TEST_TIMEOUT_MS);
-
-    try {
-      const res = await fetch(`${API_BASE}/audio/test?${params}`, {
-        method: 'POST',
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
-      return await res.json();
-    } catch (error) {
-      if (controller.signal.aborted) {
-        throw new Error('Input test timed out. Check the device and try again.');
-      }
-      throw error;
-    } finally {
-      window.clearTimeout(timeoutId);
     }
   },
 

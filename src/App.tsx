@@ -22,6 +22,11 @@ import { Power, AlertTriangle, RefreshCw, Sparkles, Globe, Activity, Gauge, Sun,
 import { useLanguage } from './i18n/LanguageContext';
 import { useTheme } from './theme/ThemeContext';
 
+const settingsAreEqual = (left: AppSettings, right: AppSettings) => {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)] as (keyof AppSettings)[]);
+  return [...keys].every((key) => left[key] === right[key]);
+};
+
 export default function App() {
   const { language, setLanguage, t } = useLanguage();
   const { theme, setTheme, isLight, currentThemeOption } = useTheme();
@@ -78,8 +83,6 @@ export default function App() {
   const [effectiveGain, setEffectiveGain] = useState<number>(1.0);
   const [peakDbfs, setPeakDbfs] = useState(-90);
   const [telemetry, setTelemetry] = useState<MonitorUpdate | null>(null);
-  const [testResult, setTestResult] = useState<string | null>(null);
-  const [isTestingInput, setIsTestingInput] = useState(false);
   const [liveWaveform, setLiveWaveform] = useState<number[]>(() => new Array(128).fill(0));
   const [spectrum, setSpectrum] = useState<number[]>(() => new Array(32).fill(0));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -313,21 +316,6 @@ export default function App() {
     handleUpdateSettings({ noise_margin_db: recommendedMargin });
   };
 
-  const testInput = async () => {
-    setIsTestingInput(true);
-    setTestResult(null);
-    try {
-      const result = await api.testInput(settings.device_id, settings.source);
-      setTestResult(result.working
-        ? `Input working · Level ${result.level_dbfs.toFixed(1)} dBFS · Peak ${result.peak_dbfs.toFixed(1)} dBFS`
-        : 'No audio data received');
-    } catch (error) {
-      setTestResult(error instanceof Error ? error.message : 'Unable to open device');
-    } finally {
-      setIsTestingInput(false);
-    }
-  };
-
   // State for manual device refresh
   const [isRefreshingDevices, setIsRefreshingDevices] = useState(false);
 
@@ -337,16 +325,19 @@ export default function App() {
       const freshDevices = await api.getAudioDevices();
       setDevices(freshDevices);
       if (!(monitorRequested && deviceReconnecting)) {
-        const reconciled = reconcileSelectedDevice(freshDevices, settings);
-        setSettings(current => ({ ...current, ...reconciled }));
-        if (reconciled.selected_device_available) void handleUpdateSettings(reconciled);
+        setSettings((current) => {
+          const next = { ...current, ...reconcileSelectedDevice(freshDevices, current) };
+          if (settingsAreEqual(next, current)) return current;
+          if (next.selected_device_available) void api.saveSettings(next);
+          return next;
+        });
       }
     } catch {
       // ignore
     } finally {
       setIsRefreshingDevices(false);
     }
-  }, [settings, handleUpdateSettings, monitorRequested, deviceReconnecting]);
+  }, [monitorRequested, deviceReconnecting]);
 
   // Periodic polling for hotplugged USB audio devices when not actively monitoring
   useEffect(() => {
@@ -360,9 +351,10 @@ export default function App() {
             return prev;
         });
         setSettings((current) => {
-          const reconciled = { ...current, ...reconcileSelectedDevice(fresh, current) };
-          if (JSON.stringify(reconciled) !== JSON.stringify(current)) void api.saveSettings(reconciled);
-          return reconciled;
+          const next = { ...current, ...reconcileSelectedDevice(fresh, current) };
+          if (settingsAreEqual(next, current)) return current;
+          void api.saveSettings(next);
+          return next;
         });
       }).catch(() => {});
     }, 4000);
@@ -594,9 +586,10 @@ export default function App() {
           </div>
         </header>
 
-        {/* Error notification banner */}
-        {errorMessage && (
-          <div id="error-banner" className="mb-6 p-3 bg-[#FF4444]/10 border border-[#FF4444]/40 rounded text-xs text-[#FF4444] flex items-center justify-between">
+        {/* Keep this slot stable so transient connection states cannot reflow the page. */}
+        <div id="connection-status-banners" className="mb-6 min-h-[4.25rem] space-y-2 overflow-anchor-none">
+          {errorMessage && (
+          <div id="error-banner" className="p-3 bg-[#FF4444]/10 border border-[#FF4444]/40 rounded text-xs text-[#FF4444] flex items-center justify-between">
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>{errorMessage}</span>
@@ -611,12 +604,13 @@ export default function App() {
               {t.retry}
             </button>}
           </div>
-        )}
-        {reconnectedMessage && (
-          <div role="status" className="mb-6 p-3 bg-[#00FF66]/10 border border-[#00FF66]/40 rounded text-xs text-[#00FF66]">
+          )}
+          {reconnectedMessage && (
+          <div role="status" className="p-3 bg-[#00FF66]/10 border border-[#00FF66]/40 rounded text-xs text-[#00FF66]">
             {reconnectedMessage}
           </div>
-        )}
+          )}
+        </div>
 
         {/* Main Hardware Grid */}
         <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
@@ -649,13 +643,7 @@ export default function App() {
                 }}
               />
               {settings.source !== 'gnuradio' && (
-                <div className="mt-3 space-y-2">
-                  <button type="button" onClick={testInput}
-                    disabled={isTestingInput || monitorRequested || deviceReconnecting}
-                    className="w-full py-2 border border-[#2A2B2F] rounded text-[10px] uppercase text-[#00F0FF] disabled:opacity-50">
-                    {isTestingInput ? 'Testing input (3s)…' : 'Test Input'}
-                  </button>
-                  {testResult && <p className="text-[10px] text-[#A0A0A0]" role="status">{testResult}</p>}
+                <div className="mt-3">
                   {telemetry && (
                     <details className="text-[10px] border border-[#202226] rounded p-2 text-[#A0A0A0]">
                       <summary className="cursor-pointer uppercase text-[#00F0FF]">Diagnostics / Advanced</summary>
@@ -787,6 +775,7 @@ export default function App() {
               </div>
 
               {/* Informative Sound Card & Live Acquisition Banner */}
+              <div id="soundcard-status-slot" className="min-h-[5.25rem] overflow-anchor-none">
               {deviceReconnecting ? (
                 <div id="soundcard-reconnecting-banner" className="p-3 bg-[#FFB800]/10 border border-[#FFB800]/30 rounded text-xs text-[#FFB800]">
                   <div className="font-bold">⚠ {settings.device_name ?? 'AUDIO DEVICE'} DISCONNECTED</div>
@@ -827,6 +816,7 @@ export default function App() {
                   </button>
                 </div>
               ) : null}
+              </div>
 
               {/* Hardware LED Meter */}
               <AudioMeter
