@@ -18,9 +18,10 @@ import { RecordingsHistory } from './components/RecordingsHistory';
 import { CalibrationModal } from './components/CalibrationModal';
 import { MetadataModal } from './components/MetadataModal';
 import { TroubleshootUsbModal } from './components/TroubleshootUsbModal';
-import { Power, AlertTriangle, RefreshCw, Sparkles, Globe, Activity, Gauge, Sun, Moon, ShieldAlert } from 'lucide-react';
+import { Power, AlertTriangle, RefreshCw, Sparkles, Activity, Sun, Moon, ShieldAlert } from 'lucide-react';
 import { useLanguage } from './i18n/LanguageContext';
 import { useTheme } from './theme/ThemeContext';
+import { createMonitorWebSocket } from './services/monitorSocketGuard';
 
 const settingsAreEqual = (left: AppSettings, right: AppSettings) => {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)] as (keyof AppSettings)[]);
@@ -128,7 +129,7 @@ export default function App() {
     wsRef.current?.close();
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(`${protocol}//${window.location.hostname}:8000/ws/monitor`);
+      const socket = createMonitorWebSocket(`${protocol}//${window.location.hostname}:8000/ws/monitor`);
       socket.onmessage = (event) => {
         try {
           const update = JSON.parse(event.data) as MonitorUpdate;
@@ -186,7 +187,7 @@ export default function App() {
         }
       };
       socket.onerror = () => {
-        setErrorMessage('WebSocket monitoring connection failed');
+        // Transport connectivity tracked by monitorSocketGuard and reconnect lifecycle
       };
       socket.onclose = () => {
         if (wsRef.current === socket) wsRef.current = null;
@@ -231,11 +232,12 @@ export default function App() {
         api.getRecordings(),
       ]);
 
-      if (loadedSettings.source !== 'gnuradio') {
-        const reconciled = reconcileSelectedDevice(loadedDevices, loadedSettings);
-        Object.assign(loadedSettings, reconciled);
-        if (reconciled.selected_device_available) await api.saveSettings(loadedSettings);
+      if (loadedSettings.source === 'gnuradio') {
+        loadedSettings.source = 'microphone';
       }
+      const reconciled = reconcileSelectedDevice(loadedDevices, loadedSettings);
+      Object.assign(loadedSettings, reconciled);
+      if (reconciled.selected_device_available) await api.saveSettings(loadedSettings);
       setSettings(loadedSettings);
       setDevices(loadedDevices);
       setRecordings(loadedRecordings);
@@ -284,7 +286,7 @@ export default function App() {
     } else {
       // Start
       try {
-        if (settings.source !== 'gnuradio' && settings.device_id === null) {
+        if (settings.device_id === null) {
           throw new Error('NO DEVICE: select an audio input before monitoring');
         }
         setStatus('opening');
@@ -400,15 +402,9 @@ export default function App() {
   };
 
   const handleSourceChange = (source: AudioSourceType) => {
-    if (source === 'gnuradio') {
-      void applyManualDeviceOverride({ source });
-      return;
-    }
-
-    const selectedDevice = selectDeviceForSource(devices, source, settings.device_id);
-
-    // Persist source and device together.
-    void applyManualDeviceOverride(settingsForSelectedDevice(source, selectedDevice));
+    const targetSource = source === 'gnuradio' ? 'microphone' : source;
+    const selectedDevice = selectDeviceForSource(devices, targetSource, settings.device_id);
+    void applyManualDeviceOverride(settingsForSelectedDevice(targetSource, selectedDevice));
   };
 
   const handleDeleteRecording = async (id: string) => {
@@ -642,54 +638,52 @@ export default function App() {
                   });
                 }}
               />
-              {settings.source !== 'gnuradio' && (
+              {telemetry && (
                 <div className="mt-3">
-                  {telemetry && (
-                    <details className="text-[10px] border border-[#202226] rounded p-2 text-[#A0A0A0]">
-                      <summary className="cursor-pointer uppercase text-[#00F0FF]">Diagnostics / Advanced</summary>
-                      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2">
-                        <dt>Configured Device</dt><dd>{telemetry.configured_device_name ?? settings.device_name ?? '—'}</dd>
-                        <dt>Resolved Device</dt><dd>{telemetry.resolved_device_name ?? '—'}</dd>
-                        <dt>Configured ID</dt><dd>{telemetry.configured_device_id ?? settings.device_id ?? '—'}</dd>
-                        <dt>Resolved ID</dt><dd>{telemetry.resolved_device_id ?? '—'}</dd>
-                        <dt>Device Available</dt><dd>{telemetry.selected_device_available ? 'Yes' : 'No'}</dd>
-                        <dt>Monitor Requested</dt><dd>{monitorRequested ? 'Yes' : 'No'}</dd>
-                        <dt>Engine Running</dt><dd>{engineRunning ? 'Yes' : 'No'}</dd>
-                        <dt>Reconnecting</dt><dd>{deviceReconnecting ? 'Yes' : 'No'}</dd>
-                        <dt>Reconnect Attempt</dt><dd>{telemetry.reconnect_attempt ?? 0}</dd>
-                        <dt>Reconnect Elapsed</dt><dd>{telemetry.reconnect_elapsed_seconds ?? 0}s</dd>
-                        <dt>Capture Backend</dt><dd>{telemetry.capture_backend ?? telemetry.hostapi ?? '—'}</dd>
-                        <dt>ALSA Device</dt><dd>{telemetry.alsa_device ?? '—'}</dd>
-                        <dt>Native Rate</dt><dd>{telemetry.capture_sample_rate ?? '—'} Hz</dd>
-                        <dt>Processing Rate</dt><dd>{telemetry.processing_sample_rate ?? 16000} Hz</dd>
-                        <dt>Capture Channels</dt><dd>{telemetry.capture_channels ?? '—'}</dd>
-                        <dt>Input Channel</dt><dd>{telemetry.input_channel ?? settings.input_channel ?? 'auto'}</dd>
-                        <dt>Callbacks</dt><dd>{telemetry.callback_count ?? 0}</dd>
-                        <dt>Frames</dt><dd>{telemetry.frames_received ?? 0}</dd>
-                        <dt>Current RMS</dt><dd>{telemetry.level_dbfs?.toFixed(1)} dBFS</dd>
-                        <dt>Peak</dt><dd>{telemetry.peak_dbfs?.toFixed(1) ?? '—'} dBFS</dd>
-                        <dt>Last Frame</dt><dd>{telemetry.last_audio_frame_ms ?? '—'} ms</dd>
-                        <dt>Ambient Profile</dt><dd>{telemetry.ambient_profile_loaded ? 'Cached' : 'Learning'}</dd>
-                        <dt>Profile age</dt><dd>{formatProfileAge(telemetry.ambient_profile_age_seconds)}</dd>
-                        <dt>Detection Profile</dt><dd>{telemetry.detection_profile ?? settings.detection_profile}</dd>
-                        <dt>Effective VAD</dt><dd>{telemetry.effective_vad_start_threshold ?? '—'} / {telemetry.effective_vad_stop_threshold ?? '—'}</dd>
-                        <dt>Effective SNR</dt><dd>{telemetry.effective_minimum_snr_db ?? '—'} dB</dd>
-                      </dl>
-                      <button type="button" className="mt-3 w-full py-1 border border-[#00F0FF]/40 text-[#00F0FF] uppercase"
-                        disabled={captureOpening}
-                        onClick={async () => {
-                          try {
-                            const update = await api.resetAmbientProfile();
-                            setTelemetry(update);
-                            if (update.status) setStatus(update.status);
-                          } catch (error) {
-                            setErrorMessage(error instanceof Error ? error.message : 'Ambient reset failed');
-                          }
-                        }}>
-                        Recalibrate Ambient
-                      </button>
-                    </details>
-                  )}
+                  <details className="text-[10px] border border-[#202226] rounded p-2 text-[#A0A0A0]">
+                    <summary className="cursor-pointer uppercase text-[#00F0FF]">Diagnostics / Advanced</summary>
+                    <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2">
+                      <dt>Configured Device</dt><dd>{telemetry.configured_device_name ?? settings.device_name ?? '—'}</dd>
+                      <dt>Resolved Device</dt><dd>{telemetry.resolved_device_name ?? '—'}</dd>
+                      <dt>Configured ID</dt><dd>{telemetry.configured_device_id ?? settings.device_id ?? '—'}</dd>
+                      <dt>Resolved ID</dt><dd>{telemetry.resolved_device_id ?? '—'}</dd>
+                      <dt>Device Available</dt><dd>{telemetry.selected_device_available ? 'Yes' : 'No'}</dd>
+                      <dt>Monitor Requested</dt><dd>{monitorRequested ? 'Yes' : 'No'}</dd>
+                      <dt>Engine Running</dt><dd>{engineRunning ? 'Yes' : 'No'}</dd>
+                      <dt>Reconnecting</dt><dd>{deviceReconnecting ? 'Yes' : 'No'}</dd>
+                      <dt>Reconnect Attempt</dt><dd>{telemetry.reconnect_attempt ?? 0}</dd>
+                      <dt>Reconnect Elapsed</dt><dd>{telemetry.reconnect_elapsed_seconds ?? 0}s</dd>
+                      <dt>Capture Backend</dt><dd>{telemetry.capture_backend ?? telemetry.hostapi ?? '—'}</dd>
+                      <dt>ALSA Device</dt><dd>{telemetry.alsa_device ?? '—'}</dd>
+                      <dt>Native Rate</dt><dd>{telemetry.capture_sample_rate ?? '—'} Hz</dd>
+                      <dt>Processing Rate</dt><dd>{telemetry.processing_sample_rate ?? 16000} Hz</dd>
+                      <dt>Capture Channels</dt><dd>{telemetry.capture_channels ?? '—'}</dd>
+                      <dt>Input Channel</dt><dd>{telemetry.input_channel ?? settings.input_channel ?? 'auto'}</dd>
+                      <dt>Callbacks</dt><dd>{telemetry.callback_count ?? 0}</dd>
+                      <dt>Frames</dt><dd>{telemetry.frames_received ?? 0}</dd>
+                      <dt>Current RMS</dt><dd>{telemetry.level_dbfs?.toFixed(1)} dBFS</dd>
+                      <dt>Peak</dt><dd>{telemetry.peak_dbfs?.toFixed(1) ?? '—'} dBFS</dd>
+                      <dt>Last Frame</dt><dd>{telemetry.last_audio_frame_ms ?? '—'} ms</dd>
+                      <dt>Ambient Profile</dt><dd>{telemetry.ambient_profile_loaded ? 'Cached' : 'Learning'}</dd>
+                      <dt>Profile age</dt><dd>{formatProfileAge(telemetry.ambient_profile_age_seconds)}</dd>
+                      <dt>Detection Profile</dt><dd>{telemetry.detection_profile ?? settings.detection_profile}</dd>
+                      <dt>Effective VAD</dt><dd>{telemetry.effective_vad_start_threshold ?? '—'} / {telemetry.effective_vad_stop_threshold ?? '—'}</dd>
+                      <dt>Effective SNR</dt><dd>{telemetry.effective_minimum_snr_db ?? '—'} dB</dd>
+                    </dl>
+                    <button type="button" className="mt-3 w-full py-1 border border-[#00F0FF]/40 text-[#00F0FF] uppercase"
+                      disabled={captureOpening}
+                      onClick={async () => {
+                        try {
+                          const update = await api.resetAmbientProfile();
+                          setTelemetry(update);
+                          if (update.status) setStatus(update.status);
+                        } catch (error) {
+                          setErrorMessage(error instanceof Error ? error.message : 'Ambient reset failed');
+                        }
+                      }}>
+                      Recalibrate Ambient
+                    </button>
+                  </details>
                 </div>
               )}
             </div>
@@ -834,8 +828,6 @@ export default function App() {
               />
 
               {isMonitoring && (() => {
-                const vadOn = (telemetry?.vad_smoothed_probability ?? 0) >=
-                  (telemetry?.effective_vad_start_threshold ?? .50);
                 const badges = [
                   ['EVENT', Boolean(telemetry?.event_active)],
                   ['VOICE', Boolean(telemetry?.effective_speech_confirmed)],
@@ -847,33 +839,6 @@ export default function App() {
                   </div>)}
                 </div>;
               })()}
-
-              {isMonitoring && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]" aria-label="Permanent audio levels">
-                  {[
-                    ['Current / RMS', `${levelDbfs.toFixed(1)} dBFS`],
-                    ['Peak', `${peakDbfs.toFixed(1)} dBFS`],
-                    ['Noise floor', `${ambientNoiseDbfs.toFixed(1)} dBFS`],
-                    ['Dynamic threshold', `${(telemetry?.dynamic_threshold_dbfs ?? -90).toFixed(1)} dBFS`],
-                    ['SNR', `${(telemetry?.snr_db ?? 0).toFixed(1)} dB`],
-                    ['Speech band', `${(telemetry?.speech_band_snr_db ?? 0).toFixed(1)} dB`],
-                    ['Speech', speechProb.toFixed(2)],
-                    ['Event', telemetry?.ambient_learning ? 'LEARNING AMBIENT' : ({
-                      speech: 'VOICE',
-                      intra_phrase_pause: 'PAUSE',
-                      transmission_hangover: 'WAITING END OF TRANSMISSION',
-                    }[telemetry?.transmission_state ?? ''] ?? (
-                      telemetry?.session_state === 'waiting_reply' ? 'WAITING FOR REPLY' :
-                      telemetry?.session_state === 'saving_communication' ? 'SAVING COMMUNICATION' :
-                      telemetry?.event_active ? 'EVENT ACTIVE' : voiceDetected ? 'VOICE' : status.replaceAll('_', ' ').toUpperCase()
-                    ))],
-                  ].map(([label, value]) => (
-                    <div key={label} className="p-2 bg-[#0A0B0D] border border-[#1A1B1F] rounded">
-                      <div className="text-[#606060] uppercase">{label}</div><div className="text-[#E0E0E0] mt-1">{value}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
 
               {isMonitoring && (
                 <details className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded text-[10px]">
@@ -908,128 +873,6 @@ export default function App() {
                   </div>
                 </details>
               )}
-
-              {/* 4-Stat Telemetry Hardware Block including Dedicated Signal-to-Noise Ratio (SNR) */}
-              {(() => {
-                const snrDb = (isMonitoring && ambientNoiseDbfs !== undefined && levelDbfs > ambientNoiseDbfs)
-                  ? Math.max(0, levelDbfs - ambientNoiseDbfs)
-                  : 0;
-
-                let snrQualityText = t.snrPoor;
-                let snrColor = '#80828A';
-                let snrBadgeBg = 'bg-[#15161A] border-[#252830] text-[#70727A]';
-                let snrBarPercent = 0;
-
-                if (isMonitoring && ambientNoiseDbfs !== undefined) {
-                  snrBarPercent = Math.min(100, Math.max(0, (snrDb / 30) * 100));
-                  if (snrDb >= 20) {
-                    snrQualityText = t.snrExcellent;
-                    snrColor = '#00F0FF';
-                    snrBadgeBg = 'bg-[#00F0FF]/15 border-[#00F0FF]/40 text-[#00F0FF] shadow-[0_0_8px_rgba(0,240,255,0.25)]';
-                  } else if (snrDb >= 12) {
-                    snrQualityText = t.snrGood;
-                    snrColor = '#00FF66';
-                    snrBadgeBg = 'bg-[#00FF66]/15 border-[#00FF66]/40 text-[#00FF66] shadow-[0_0_8px_rgba(0,255,102,0.2)]';
-                  } else if (snrDb >= 6) {
-                    snrQualityText = t.snrFair;
-                    snrColor = '#FFB800';
-                    snrBadgeBg = 'bg-[#FFB800]/15 border-[#FFB800]/40 text-[#FFB800]';
-                  } else {
-                    snrQualityText = t.snrPoor;
-                    snrColor = '#FF4444';
-                    snrBadgeBg = 'bg-[#FF4444]/10 border-[#FF4444]/30 text-[#FF4444]';
-                  }
-                }
-
-                return (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
-                    {/* Dedicated Signal-to-Noise Ratio (SNR) Telemetry Card */}
-                    <div id="snr-telemetry-card" className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2 relative overflow-hidden group hover:border-[#2A2B35] transition-colors">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-[9px] text-[#606060] uppercase tracking-wider font-semibold">
-                          <Gauge className="w-3 h-3 text-[#00F0FF]" />
-                          <span>{t.snrMetric}</span>
-                        </div>
-                        <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded border uppercase font-bold tracking-wider ${snrBadgeBg}`}>
-                          {isMonitoring ? snrQualityText : t.systemStandby}
-                        </span>
-                      </div>
-
-                      <div className="flex items-baseline justify-between">
-                        <div style={{ color: isMonitoring ? snrColor : '#50525A' }} className="text-xl font-mono font-bold tracking-tight">
-                          {isMonitoring ? `+${snrDb.toFixed(1)}` : '--.-'} <span className="text-xs font-normal text-[#70727A]">dB</span>
-                        </div>
-                        <div className="text-[9px] font-mono text-[#50525A] text-right" title="Signal dBFS minus Calibrated Ambient Noise Floor">
-                          {isMonitoring && ambientNoiseDbfs !== undefined ? `Δ ${levelDbfs.toFixed(0)} - (${ambientNoiseDbfs.toFixed(0)})` : 'Δ --'}
-                        </div>
-                      </div>
-
-                      {/* SNR Visual Scale Bar (0 to 30 dB dynamic range) */}
-                      <div className="space-y-1">
-                        <div className="w-full bg-[#141518] h-1.5 rounded-full overflow-hidden border border-[#202228] flex">
-                          <div
-                            style={{
-                              width: `${isMonitoring ? snrBarPercent : 0}%`,
-                              backgroundColor: snrColor,
-                              boxShadow: isMonitoring ? `0 0 6px ${snrColor}` : 'none',
-                            }}
-                            className="h-full transition-all duration-150 rounded-full"
-                          />
-                        </div>
-                        <div className="flex justify-between text-[7.5px] font-mono text-[#40424A]">
-                          <span>0dB</span>
-                          <span>+12dB</span>
-                          <span>+24dB+</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* VAD Confidence Metric */}
-                    <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2">
-                      <div className="text-[9px] text-[#606060] uppercase tracking-wider">{t.vadConfidenceMetric}</div>
-                      <div className="flex items-baseline justify-between">
-                        <div style={{ color: accentColor }} className="text-xl font-mono font-bold">
-                          {isMonitoring ? speechProb.toFixed(2) : '--'}
-                        </div>
-                        <div className="text-[9px] font-mono text-[#50525A]">
-                          / {(settings.vad_start_threshold ?? .50).toFixed(2)}
-                        </div>
-                      </div>
-                      <div className="w-full bg-[#141518] h-1.5 rounded-full overflow-hidden border border-[#202228]">
-                        <div
-                          style={{
-                            width: `${isMonitoring ? Math.min(100, Math.round(speechProb * 100)) : 0}%`,
-                            backgroundColor: accentColor,
-                          }}
-                          className="h-full transition-all duration-100 rounded-full"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Recording Duration Metric */}
-                    <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2">
-                      <div className="text-[9px] text-[#606060] uppercase tracking-wider">{t.recDuration}</div>
-                      <div className="text-xl font-mono font-bold text-[#E0E0E0]">
-                        {durationSec > 0 ? `${durationSec.toFixed(1)}s` : '00:00'}
-                      </div>
-                      <div className="text-[9px] font-mono text-[#50525A]">
-                        {status === 'RECORDING' ? t.statusRecording : t.statusIdle}
-                      </div>
-                    </div>
-
-                    {/* Format Codec Metric */}
-                    <div className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded flex flex-col justify-between space-y-2">
-                      <div className="text-[9px] text-[#606060] uppercase tracking-wider">{t.formatCodec}</div>
-                      <div className="text-xl font-mono font-bold text-[#A0A0A0] truncate">
-                        16k PCM
-                      </div>
-                      <div className="text-[9px] font-mono text-[#50525A]">
-                        Float32 / Mono
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
 
             {/* Active / Last Recording Player */}
@@ -1080,7 +923,7 @@ export default function App() {
           </div>
 
           <div>
-            {t.targetFifo}: <span className="text-[#A0A0A0]">/tmp/hackrf_audio.f32</span> | {t.port}: <span className="text-[#A0A0A0]">localhost:8000</span>
+            {t.port}: <span className="text-[#A0A0A0]">localhost:8000</span> | PortAudio: <span className="text-[#A0A0A0]">16 kHz Mono</span>
           </div>
         </footer>
       </div>

@@ -2,19 +2,58 @@ export type BackendTransportState = 'connecting' | 'online' | 'offline';
 
 export const BACKEND_TRANSPORT_EVENT = 'santek:backend-transport';
 
-const emitBackendTransport = (state: BackendTransportState) => {
-  window.dispatchEvent(new CustomEvent<BackendTransportState>(BACKEND_TRANSPORT_EVENT, {
-    detail: state,
-  }));
+export const emitBackendTransport = (state: BackendTransportState) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent<BackendTransportState>(BACKEND_TRANSPORT_EVENT, {
+      detail: state,
+    }));
+  } catch {
+    // Ignore event dispatch failure
+  }
 };
 
-const isMonitorSocketUrl = (url: string | URL) => {
+export const isMonitorSocketUrl = (url: string | URL) => {
   try {
     const parsed = new URL(String(url), window.location.href);
     return parsed.pathname === '/ws/monitor';
   } catch {
     return String(url).includes('/ws/monitor');
   }
+};
+
+export const wrapMonitorSocket = (socket: WebSocket): WebSocket => {
+  try {
+    socket.addEventListener('open', () => emitBackendTransport('online'));
+    socket.addEventListener('message', () => emitBackendTransport('online'));
+    socket.addEventListener('error', (event) => {
+      emitBackendTransport('offline');
+      try {
+        event.stopImmediatePropagation();
+      } catch {
+        // Ignore
+      }
+    });
+
+    try {
+      Object.defineProperty(socket, 'onerror', {
+        configurable: true,
+        enumerable: true,
+        get: () => null,
+        set: () => undefined,
+      });
+    } catch {
+      // EventTarget suppression above remains the fallback.
+    }
+  } catch {
+    // Safe fallback
+  }
+  return socket;
+};
+
+export const createMonitorWebSocket = (url: string | URL): WebSocket => {
+  const socket = new WebSocket(url);
+  return wrapMonitorSocket(socket);
 };
 
 /**
@@ -33,37 +72,35 @@ export const installMonitorSocketGuard = () => {
   if (guardedWindow.__santekMonitorSocketGuardInstalled) return;
   guardedWindow.__santekMonitorSocketGuardInstalled = true;
 
-  const NativeWebSocket = window.WebSocket;
-  const MonitorSafeWebSocket = new Proxy(NativeWebSocket, {
-    construct(Target, args) {
-      const socket = Reflect.construct(Target, args, Target) as WebSocket;
-      const [url] = args as [string | URL];
-      if (!isMonitorSocketUrl(url)) return socket;
+  try {
+    const NativeWebSocket = window.WebSocket;
+    if (!NativeWebSocket) return;
 
-      socket.addEventListener('open', () => emitBackendTransport('online'));
-      socket.addEventListener('message', () => emitBackendTransport('online'));
-      socket.addEventListener('error', (event) => {
-        emitBackendTransport('offline');
-        // This is a local transport problem, not a functional application error.
-        // Keep onclose available so the existing reconnect lifecycle can run.
-        event.stopImmediatePropagation();
-      });
+    const MonitorSafeWebSocket = new Proxy(NativeWebSocket, {
+      construct(Target, args) {
+        const socket = Reflect.construct(Target, args, Target) as WebSocket;
+        const [url] = args as [string | URL];
+        if (!isMonitorSocketUrl(url)) return socket;
+        return wrapMonitorSocket(socket);
+      },
+    });
 
+    try {
+      window.WebSocket = MonitorSafeWebSocket as typeof WebSocket;
+    } catch {
       try {
-        Object.defineProperty(socket, 'onerror', {
+        Object.defineProperty(window, 'WebSocket', {
+          value: MonitorSafeWebSocket,
+          writable: true,
           configurable: true,
-          enumerable: true,
-          get: () => null,
-          set: () => undefined,
         });
       } catch {
-        // EventTarget suppression above remains the fallback.
+        // window.WebSocket is protected or non-configurable in this environment
       }
-      return socket;
-    },
-  });
-
-  window.WebSocket = MonitorSafeWebSocket as typeof WebSocket;
+    }
+  } catch {
+    // Safe fallback: will not throw in any environment
+  }
 };
 
 export const probeLocalBackend = async (timeoutMs = 1800): Promise<boolean> => {
