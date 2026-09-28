@@ -44,6 +44,7 @@ export const AudioPlayer: React.FC<Props> = ({
   // Real-Time Audio Normalization (Playback Peak Boost without altering source WAV)
   const [isNormalizeEnabled, setIsNormalizeEnabled] = useState<boolean>(false);
   const [normMetrics, setNormMetrics] = useState<NormalizationMetrics | null>(null);
+  const [audioElementGeneration, setAudioElementGeneration] = useState(0);
 
   // Waveform Zoom & Inspection state
   const [zoom, setZoom] = useState<number>(1.0);
@@ -55,38 +56,62 @@ export const AudioPlayer: React.FC<Props> = ({
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const pendingNativePlaybackRef = useRef<{ time: number; shouldPlay: boolean } | null>(null);
 
   const audioUrl = recording.audio_url || `/api/recordings/${recording.recording_id}/audio`;
 
   const speedOptions = [0.5, 1.0, 1.5];
   const zoomPresets = [1.0, 2.0, 4.0, 8.0, 16.0];
 
-  // Fetch or calculate recording normalization metrics on change
-  useEffect(() => {
-    let isCancelled = false;
-    getRecordingNormalizationMetrics(recording.recording_id, audioUrl).then((metrics) => {
-      if (!isCancelled) {
-        setNormMetrics(metrics);
-      }
-    });
-    return () => {
-      isCancelled = true;
-    };
-  }, [recording.recording_id, audioUrl]);
+  const configureAudioElement = useCallback((audio: HTMLAudioElement) => {
+    audio.muted = false;
+    audio.volume = 1;
+    audio.playbackRate = playbackRate;
+  }, [playbackRate]);
 
-  // Initialize Web Audio graph for the player element
-  const initWebAudio = useCallback(() => {
-    if (!audioRef.current || sourceNodeRef.current) return;
+  // A MediaElementAudioSourceNode cannot be detached back into native playback.
+  // Remounting the element is therefore the safe fallback when normalization is
+  // disabled or its Web Audio graph fails.
+  const restoreNativePlayback = useCallback((shouldPlay: boolean) => {
+    const audio = audioRef.current;
+    pendingNativePlaybackRef.current = {
+      time: audio?.currentTime || 0,
+      shouldPlay,
+    };
+
+    sourceNodeRef.current?.disconnect();
+    gainNodeRef.current?.disconnect();
+    compressorRef.current?.disconnect();
+    const context = audioCtxRef.current;
+    if (context && context.state !== 'closed') {
+      context.close().catch(() => {});
+    }
+    audioCtxRef.current = null;
+    sourceNodeRef.current = null;
+    gainNodeRef.current = null;
+    compressorRef.current = null;
+    setIsNormalizeEnabled(false);
+    setAudioElementGeneration((generation) => generation + 1);
+  }, []);
+
+  // Initialize Web Audio only after normalization has explicitly been enabled.
+  const initWebAudio = useCallback(async (metrics: NormalizationMetrics): Promise<boolean> => {
+    if (!audioRef.current) return false;
+    if (sourceNodeRef.current) return true;
+    let ctx: AudioContext | null = null;
+    let source: MediaElementAudioSourceNode | null = null;
+    let gain: GainNode | null = null;
+    let compressor: DynamicsCompressorNode | null = null;
     try {
       const AudioCtxClass =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtxClass) return;
+      if (!AudioCtxClass) return false;
 
-      const ctx = new AudioCtxClass();
-      const source = ctx.createMediaElementSource(audioRef.current);
-      const gain = ctx.createGain();
-      const compressor = ctx.createDynamicsCompressor();
+      ctx = new AudioCtxClass();
+      source = ctx.createMediaElementSource(audioRef.current);
+      gain = ctx.createGain();
+      compressor = ctx.createDynamicsCompressor();
 
       // Transparent safety limiter configuration
       compressor.threshold.setValueAtTime(-1.0, ctx.currentTime);
@@ -95,8 +120,7 @@ export const AudioPlayer: React.FC<Props> = ({
       compressor.attack.setValueAtTime(0.003, ctx.currentTime);
       compressor.release.setValueAtTime(0.1, ctx.currentTime);
 
-      const targetGain = isNormalizeEnabled && normMetrics ? normMetrics.boostMultiplier : 1.0;
-      gain.gain.setValueAtTime(targetGain, ctx.currentTime);
+      gain.gain.setValueAtTime(metrics.boostMultiplier, ctx.currentTime);
 
       source.connect(gain);
       gain.connect(compressor);
@@ -106,10 +130,22 @@ export const AudioPlayer: React.FC<Props> = ({
       sourceNodeRef.current = source;
       gainNodeRef.current = gain;
       compressorRef.current = compressor;
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+      return true;
     } catch (err) {
       console.warn('Web Audio playback routing setup:', err);
+      source?.disconnect();
+      gain?.disconnect();
+      compressor?.disconnect();
+      if (ctx && ctx.state !== 'closed') ctx.close().catch(() => {});
+      // createMediaElementSource may already have claimed the element, so use a
+      // fresh element to guarantee that ordinary HTML playback remains audible.
+      restoreNativePlayback(Boolean(audioRef.current && !audioRef.current.paused));
+      return false;
     }
-  }, [isNormalizeEnabled, normMetrics]);
+  }, [restoreNativePlayback]);
 
   // Adjust Gain dynamically when normalization toggle or metrics change
   useEffect(() => {
@@ -147,12 +183,20 @@ export const AudioPlayer: React.FC<Props> = ({
     }
   };
 
-  const toggleNormalize = () => {
-    initWebAudio();
-    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume();
+  const toggleNormalize = async () => {
+    if (isNormalizeEnabled) {
+      restoreNativePlayback(Boolean(audioRef.current && !audioRef.current.paused));
+      return;
     }
-    setIsNormalizeEnabled((prev) => !prev);
+
+    const audio = audioRef.current;
+    if (!audio) return;
+    configureAudioElement(audio);
+    const metrics = normMetrics ?? await getRecordingNormalizationMetrics(recording.recording_id, audioUrl);
+    setNormMetrics(metrics);
+    if (await initWebAudio(metrics)) {
+      setIsNormalizeEnabled(true);
+    }
   };
 
   const handleZoomIn = () => {
@@ -184,17 +228,24 @@ export const AudioPlayer: React.FC<Props> = ({
     });
   };
 
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    initWebAudio();
-    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume();
-    }
+  const togglePlay = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    configureAudioElement(audio);
     if (isPlaying) {
-      audioRef.current.pause();
+      audio.pause();
       setIsPlaying(false);
     } else {
-      audioRef.current.play().then(() => {
+      if (isNormalizeEnabled && audioCtxRef.current?.state === 'suspended') {
+        try {
+          await audioCtxRef.current.resume();
+        } catch (err) {
+          console.warn('Web Audio resume failed; restoring native playback:', err);
+          restoreNativePlayback(true);
+          return;
+        }
+      }
+      audio.play().then(() => {
         setIsPlaying(true);
       }).catch(() => {
         setIsPlaying(false);
@@ -268,13 +319,24 @@ export const AudioPlayer: React.FC<Props> = ({
   return (
     <div id={`player-${recording.recording_id}`} className="p-3.5 bg-[#111215] border border-[#1A1B1F] rounded-lg font-mono text-xs space-y-3">
       <audio
+        key={audioElementGeneration}
         ref={audioRef}
         src={audioUrl}
         onTimeUpdate={handleTimeUpdate}
         onEnded={handleEnded}
         onLoadedMetadata={() => {
-          if (audioRef.current?.duration) {
-            setDuration(audioRef.current.duration);
+          const audio = audioRef.current;
+          if (audio?.duration) {
+            setDuration(audio.duration);
+          }
+          const pending = pendingNativePlaybackRef.current;
+          if (audio && pending) {
+            pendingNativePlaybackRef.current = null;
+            configureAudioElement(audio);
+            audio.currentTime = Math.min(pending.time, audio.duration || pending.time);
+            if (pending.shouldPlay) {
+              audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+            }
           }
         }}
       />
@@ -584,4 +646,3 @@ export const AudioPlayer: React.FC<Props> = ({
     </div>
   );
 };
-

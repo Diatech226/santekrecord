@@ -11,6 +11,7 @@
     "lint": "tsc --noEmit",
     "test:scroll-regression": "node --import tsx --test src/scrollRegression.test.ts",
     "test:telemetry-ui": "node --import tsx --test src/telemetryUiRegression.test.ts",
+    "test:audio-player": "node --import tsx --test src/audioPlayerRegression.test.ts",
     "test:device-reconciliation": "node --import tsx --test src/services/deviceReconciliation.test.ts"
   },
   "dependencies": {
