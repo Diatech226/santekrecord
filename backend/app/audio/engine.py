@@ -412,6 +412,7 @@ class MainAudioEngine:
             if not self._monitor_requested:
                 self._monitor_generation += 1
             self._monitor_requested = True
+            self.recorder.resume()
             return self._start_locked()
 
     def _start_locked(self, *, from_reconnect: bool = False,
@@ -503,6 +504,9 @@ class MainAudioEngine:
             # Snapshot under the transition lock. Closing then unblocks a worker
             # waiting in read_chunk and promptly releases ALSA.
             source = self.source
+        # The recorder lock admits an in-flight frame first, rejects all later
+        # frames, then durably finalizes WAV and JSON before capture teardown.
+        self.recorder.stop_and_flush()
         if source is not None:
             try:
                 source.stop()
@@ -522,7 +526,6 @@ class MainAudioEngine:
 
         self.source = None
 
-        self.recorder.stop_and_flush()
         self.current_status = "idle"
         self.current_level_dbfs = -90.0
         self.current_speech_prob = 0.0
@@ -545,12 +548,13 @@ class MainAudioEngine:
             self.device_identity_match = False
             generation = self._monitor_generation
         if self.source is not None:
+            self.recorder.stop_and_flush()
             try:
                 self.source.stop()
             except Exception as exc:
                 print(f"[AUDIO ERROR] Disconnect close failed: {exc}")
-        # This is the recorder's existing controlled WAV/session finalizer.
-        self.recorder.stop_and_flush()
+        else:
+            self.recorder.stop_and_flush()
         self.current_voice_detected = False
         self._broadcast(self.get_telemetry())
         with self._capture_lock:
