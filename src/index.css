@@ -19,6 +19,8 @@
   --text-secondary: #a0a0a0;
   --text-muted: #606060;
   --slider-track: #1a1b1f;
+  --status-success: #00ff88;
+  --status-warning: #ffb800;
   color-scheme: dark;
 }
 
@@ -40,7 +42,27 @@
   --text-secondary: #475569;
   --text-muted: #94a3b8;
   --slider-track: #e2e8f0;
+  --status-success: #047857;
+  --status-warning: #92400e;
   color-scheme: light;
+}
+
+.telemetry-state-active,
+.telemetry-listening {
+  border-color: color-mix(in srgb, var(--status-success) 45%, transparent);
+  background-color: color-mix(in srgb, var(--status-success) 10%, transparent);
+  color: var(--status-success);
+}
+
+.telemetry-state-recording {
+  border-color: #dc2626;
+  background-color: color-mix(in srgb, #dc2626 14%, transparent);
+  color: #ef4444;
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.22);
+}
+
+.theme-light .telemetry-state-recording {
+  color: #b91c1c;
 }
 
 /* Desktop dashboard must always remain vertically scrollable. */
