@@ -88,6 +88,7 @@ export default function App() {
   const [spectrum, setSpectrum] = useState<number[]>(() => new Array(32).fill(0));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [uptimeSeconds, setUptimeSeconds] = useState(0);
+  const [signalVeryLow, setSignalVeryLow] = useState(false);
 
   // Recordings
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
@@ -124,6 +125,17 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const monitoringRef = useRef(false);
   const reconnectingRef = useRef(false);
+
+  // Avoid warning during normal start-up or a single quiet telemetry sample.
+  useEffect(() => {
+    if (!isMonitoring || levelDbfs > -75) {
+      setSignalVeryLow(false);
+      return;
+    }
+
+    const quietSignalTimer = window.setTimeout(() => setSignalVeryLow(true), 3000);
+    return () => window.clearTimeout(quietSignalTimer);
+  }, [isMonitoring, levelDbfs <= -75]);
 
   const connectMonitorSocket = useCallback(() => {
     wsRef.current?.close();
@@ -762,33 +774,21 @@ export default function App() {
             
             {/* Live Monitoring & Signal Visualization Panel */}
             <div className="p-5 bg-[#111215] border border-[#1A1B1F] rounded-lg flex flex-col gap-5">
-              <div className="flex items-center justify-between border-b border-[#1A1B1F] pb-3">
+              <div className="flex flex-col items-start justify-between gap-2 border-b border-[#1A1B1F] pb-3 sm:flex-row sm:items-center">
                 <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${isMonitoring ? 'bg-[#FF4444] animate-pulse shadow-[0_0_6px_#FF4444]' : 'bg-[#404040]'}`}></div>
+                  <div className={`h-2 w-2 rounded-full ${isMonitoring ? 'bg-[var(--status-success)]' : 'bg-[#404040]'}`}></div>
                   <span className="text-xs uppercase tracking-wider text-[#A0A0A0] font-bold">
                     {t.liveTelemetry}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 sm:gap-3">
-                  {(monitorRequested || engineRunning) && (
-                    <button
-                      id="btn-stop-surveillance-top"
-                      type="button"
-                      onClick={toggleMonitoring}
-                      className="px-2.5 sm:px-3 py-1 bg-[#FF4444] hover:bg-[#FF2222] text-white font-mono font-bold rounded text-[11px] uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(255,68,68,0.4)] flex items-center gap-1.5 cursor-pointer"
-                      title={t.terminateSurveillance}
-                    >
-                      <Power className="w-3.5 h-3.5" />
-                      <span>{t.terminateSurveillance}</span>
-                    </button>
-                  )}
+                <div className="max-w-full">
                   <StatusIndicator status={status} durationSec={durationSec} />
                 </div>
               </div>
 
               {/* Keep the live decisions visible while the telemetry panel scrolls. */}
               <div
-                className="sticky top-2 z-30 flex items-center gap-2 rounded border border-[#25272D] bg-[#111215]/95 p-1.5 shadow-lg backdrop-blur-sm"
+                className="sticky top-2 z-30 grid grid-cols-1 gap-1.5 rounded border border-[var(--border-active)] bg-[var(--bg-card)]/95 p-1.5 shadow-lg backdrop-blur-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-2"
                 aria-label="Voice decision indicators"
               >
                 <div className="grid grid-cols-3 gap-1.5 sm:gap-2 flex-1">
@@ -798,14 +798,13 @@ export default function App() {
                   ] as const).map(([label, active]) => (
                     <div
                       key={label}
-                      className={`min-w-0 rounded border px-1 py-2 text-center text-[10px] font-bold sm:px-2 ${active ? 'border-[#00FF88] bg-[#00FF88]/10 text-[#00FF88]' : 'border-[#303238] text-[#707070]'}`}
+                      className={`min-w-0 whitespace-nowrap rounded border px-1 py-2 text-center text-[10px] font-bold sm:px-2 ${active ? 'telemetry-state-active' : 'border-[var(--border-active)] text-[var(--text-muted)]'}`}
                     >
                       {label} {active ? 'ON' : 'OFF'}
                     </div>
                   ))}
                   <div
-                    className={`min-w-0 rounded border px-1 py-2 text-center text-[10px] font-bold sm:px-2 ${telemetry?.recording ? 'border-[#FF4444] bg-[#FF4444]/15 text-[#FF5555] shadow-[0_0_10px_rgba(255,68,68,0.25)]' : 'border-[#303238] text-[#707070]'}`}
-                    aria-live="polite"
+                    className={`min-w-0 whitespace-nowrap rounded border px-1 py-2 text-center text-[10px] font-bold sm:px-2 ${telemetry?.recording ? 'telemetry-state-recording' : 'border-[var(--border-active)] text-[var(--text-muted)]'}`}
                   >
                     {telemetry?.recording && <span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#FF4444] align-middle shadow-[0_0_6px_#FF4444] animate-pulse" aria-hidden="true" />}
                     REC {telemetry?.recording ? `ON ${durationSec.toFixed(1)}s` : 'OFF'}
@@ -816,14 +815,16 @@ export default function App() {
                     id="btn-stop-monitoring-sticky"
                     type="button"
                     onClick={toggleMonitoring}
-                    className="px-2.5 py-1.5 bg-[#FF4444] hover:bg-[#FF2222] text-white font-mono font-bold rounded text-[10px] uppercase tracking-wider transition-all shadow-[0_0_8px_rgba(255,68,68,0.4)] flex items-center gap-1.5 cursor-pointer shrink-0"
+                    className="flex w-full shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded bg-[#D92D2D] px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-white transition-colors hover:bg-[#B91C1C] sm:w-auto"
                     title={t.terminateSurveillance}
                   >
                     <Power className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">{t.terminateSurveillance}</span>
-                    <span className="sm:hidden">STOP</span>
+                    <span>{t.terminateSurveillance}</span>
                   </button>
                 )}
+                <span className="sr-only" role="status" aria-live="polite">
+                  REC {telemetry?.recording ? 'ON' : 'OFF'}
+                </span>
               </div>
 
               {/* Informative Sound Card & Live Acquisition Banner */}
@@ -849,27 +850,30 @@ export default function App() {
                     {t.startSurveillance}
                   </button>
                 </div>
-              ) : (
-                <div id="soundcard-active-banner" className="p-3 bg-[#00FF88]/10 border border-[#00FF88]/30 rounded text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-[#00FF88]">
+              ) : signalVeryLow ? (
+                <div id="soundcard-quiet-banner" className="flex flex-col items-start justify-between gap-2 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-[var(--status-warning)] sm:flex-row sm:items-center">
                   <div className="flex items-center gap-2">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00FF88] opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00FF88]"></span>
-                    </span>
-                    <span className="font-mono text-[11px] font-semibold text-[#E0E0E0]">
-                      {settings.device_name ?? 'Entrée audio'} · <span className="text-[#00FF88] uppercase">Écoute en cours</span>
-                    </span>
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <div><strong>{t.signalVeryLow}</strong><span className="ml-1">— {t.soundCardQuietNotice}</span></div>
                   </div>
                   <button
-                    id="btn-quick-stop-monitor"
+                    id="btn-quick-boost-gain"
                     type="button"
-                    onClick={toggleMonitoring}
-                    className="px-3 py-1 bg-[#FF4444] hover:bg-[#FF2222] text-white font-mono font-bold rounded text-[11px] uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(255,68,68,0.4)] shrink-0 flex items-center gap-1.5 cursor-pointer"
-                    title={t.terminateSurveillance}
+                    onClick={() => handleUpdateSettings({ input_gain: Math.min(8.0, (settings.input_gain ?? 1.0) * 2.0) })}
+                    className="shrink-0 rounded border border-amber-600/50 bg-amber-500/15 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={(settings.input_gain ?? 1.0) >= 8.0}
                   >
-                    <Power className="w-3.5 h-3.5" />
-                    <span>{t.terminateSurveillance}</span>
+                    {t.boostGain} ({Math.min(8.0, (settings.input_gain ?? 1.0) * 2.0)}×)
                   </button>
+                </div>
+              ) : (
+                <div id="soundcard-active-banner" className="telemetry-listening flex items-center gap-2 rounded border p-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--status-success)]" aria-hidden="true" />
+                    <span className="font-mono text-[11px] font-semibold text-[var(--text-primary)]">
+                      {settings.device_name ?? t.audioInputFallback} · <span className="uppercase text-[var(--status-success)]">{t.listeningInProgress}</span>
+                    </span>
+                  </div>
                 </div>
               )}
               </div>

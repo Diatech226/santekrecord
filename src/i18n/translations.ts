@@ -38,6 +38,10 @@ export interface Translations {
   channel2: string;
   soundCardInactiveNotice: string;
   soundCardQuietNotice: string;
+  audioInputFallback: string;
+  listeningInProgress: string;
+  signalVeryLow: string;
+  boostGain: string;
   soundCardTroubleshootTitle: string;
 
   // Detection Parameters
@@ -348,7 +352,11 @@ export const translations: Record<Language, Translations> = {
     channel1: 'Channel 1 (Left / Primary)',
     channel2: 'Channel 2 (Right / Secondary)',
     soundCardInactiveNotice: 'Surveillance is paused. Click "START MONITORING" to enable sound card stream.',
-    soundCardQuietNotice: 'Audio level is quiet (< -70 dBFS). If voice is not triggering, increase software gain or adjust threshold.',
+    soundCardQuietNotice: 'Audio level is quiet (≤ -75 dBFS). If voice is not triggering, increase software gain or adjust threshold.',
+    audioInputFallback: 'Audio input',
+    listeningInProgress: 'Listening',
+    signalVeryLow: 'Audio signal is very low',
+    boostGain: '+6dB Gain',
     soundCardTroubleshootTitle: 'Sound Card Status & Troubleshooting',
 
     detectionParams: 'Detection Parameters',
@@ -647,7 +655,11 @@ export const translations: Record<Language, Translations> = {
     channel1: 'Canal 1 (Gauche / Principal)',
     channel2: 'Canal 2 (Droite / Secondaire)',
     soundCardInactiveNotice: 'Surveillance en pause. Cliquez sur "DÉMARRER LA SURVEILLANCE" pour activer l\'écoute de la carte son.',
-    soundCardQuietNotice: 'Niveau audio faible (< -70 dBFS). Si le son ne déclenche pas l\'enregistrement, augmentez le gain logiciel ou ajustez le seuil.',
+    soundCardQuietNotice: 'Niveau audio faible (≤ -75 dBFS). Si le son ne déclenche pas l\'enregistrement, augmentez le gain logiciel ou ajustez le seuil.',
+    audioInputFallback: 'Entrée audio',
+    listeningInProgress: 'Écoute en cours',
+    signalVeryLow: 'Signal audio très faible',
+    boostGain: 'Gain +6 dB',
     soundCardTroubleshootTitle: 'État de la Carte Son & Diagnostic',
 
     detectionParams: 'Paramètres de Détection',

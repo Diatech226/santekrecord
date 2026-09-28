@@ -10,6 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:scroll-regression": "node --import tsx --test src/scrollRegression.test.ts",
+    "test:telemetry-ui": "node --import tsx --test src/telemetryUiRegression.test.ts",
     "test:device-reconciliation": "node --import tsx --test src/services/deviceReconciliation.test.ts"
   },
   "dependencies": {
