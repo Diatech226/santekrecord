@@ -53,6 +53,10 @@ def save_metadata(meta: RecordingMetadata, output_dir: str = "recordings") -> st
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{meta.recording_id}.json"
     file_path = os.path.join(output_dir, filename)
-    with open(file_path, "w", encoding="utf-8") as f:
+    temporary_path = file_path + ".part"
+    with open(temporary_path, "w", encoding="utf-8") as f:
         f.write(meta.model_dump_json(indent=2))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary_path, file_path)
     return file_path

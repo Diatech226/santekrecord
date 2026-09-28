@@ -1,4 +1,6 @@
 import os
+import json
+import threading
 import wave
 from collections import deque
 from datetime import datetime, timezone
@@ -38,7 +40,73 @@ class AudioRecorderEngine:
         self.meaningful_radio_samples = 0
         self._sequence_stamp = ""
         self._sequence = 0
+        self._lock = threading.RLock()
+        self._accepting_frames = True
+        self._spool_path = None
+        self._spool_file = None
+        self._recover_interrupted_recordings()
         self._configure_managers()
+
+    def _recover_interrupted_recordings(self):
+        """Turn durable raw spools left by a crash into valid, visible WAVs."""
+        for manifest_path in sorted(os.path.join(self.recordings_dir, name)
+                                    for name in os.listdir(self.recordings_dir)
+                                    if name.endswith(".recording.json.part")):
+            raw_path = manifest_path.removesuffix(".recording.json.part") + ".pcm.part"
+            if not os.path.exists(raw_path):
+                continue
+            try:
+                with open(manifest_path, encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+                count = os.path.getsize(raw_path) // np.dtype(np.float32).itemsize
+                if count <= 0:
+                    continue
+                raw = np.memmap(raw_path, dtype=np.float32, mode="r", shape=(count,))
+                recording_id = manifest["recording_id"] + "-recovered"
+                wav_path = os.path.join(self.recordings_dir, recording_id + ".wav")
+                self._write_wav_atomic(wav_path, raw, int(manifest["sample_rate"]))
+                meta = RecordingMetadata(
+                    recording_id=recording_id, communication_id=recording_id,
+                    source=manifest.get("source", "microphone"),
+                    device=manifest.get("device", "Audio Device"),
+                    sample_rate=int(manifest["sample_rate"]), channels=1,
+                    timestamp_start=manifest["timestamp_start"],
+                    timestamp_end=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    duration_seconds=round(count / int(manifest["sample_rate"]), 3),
+                    saved_duration_seconds=round(count / int(manifest["sample_rate"]), 3),
+                    raw_event_duration_seconds=round(count / int(manifest["sample_rate"]), 3),
+                    communication_end_reason="interrupted_recovery",
+                )
+                save_metadata(meta, self.recordings_dir)
+                del raw
+                os.remove(raw_path)
+                os.remove(manifest_path)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                # A potentially recoverable spool is evidence, never startup trash.
+                print(f"[RECORDER] Preserving unrecoverable spool {raw_path}: {exc}")
+
+    def resume(self):
+        with self._lock:
+            self._accepting_frames = True
+
+    def _open_spool(self, recording_id, start_iso):
+        self._spool_path = os.path.join(self.recordings_dir, recording_id + ".pcm.part")
+        manifest_path = os.path.join(self.recordings_dir, recording_id + ".recording.json.part")
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump({"recording_id": recording_id, "timestamp_start": start_iso,
+                       "sample_rate": self.sample_rate, "source": self.config.source,
+                       "device": self.config.device_name or "Audio Device"}, handle)
+            handle.flush(); os.fsync(handle.fileno())
+        self._spool_file = open(self._spool_path, "wb")
+
+    def _append_spool(self, chunks):
+        if self._spool_file is None:
+            return
+        for chunk in chunks:
+            np.asarray(chunk, dtype=np.float32).tofile(self._spool_file)
+        # Python's buffer is flushed for every capture frame. The OS can then
+        # persist it progressively rather than keeping a whole session in RAM.
+        self._spool_file.flush()
 
     def _configure_managers(self):
         self.transmission_manager = TransmissionManager(
@@ -64,12 +132,27 @@ class AudioRecorderEngine:
     def _push_prebuffer(self, chunk):
         self.pre_buffer.append(chunk.copy()); self.pre_buffer_samples += len(chunk)
         limit = int(self.config.preroll_seconds * self.sample_rate)
-        while self.pre_buffer and self.pre_buffer_samples - len(self.pre_buffer[0]) >= limit:
+        # Always retain the current frame: even with preroll disabled it is the
+        # trigger frame and therefore already captured voice.
+        while len(self.pre_buffer) > 1 and self.pre_buffer_samples - len(self.pre_buffer[0]) >= limit:
             self.pre_buffer_samples -= len(self.pre_buffer.popleft())
 
     def process_frame(self, chunk, level_dbfs, speech_prob, *, speech_confirmed=None,
                       candidate=False, event_active=False, radio_activity=False, confidence=None, metrics=None,
                       vad_backend="unknown", return_to_ambient=None):
+        with self._lock:
+            if not self._accepting_frames:
+                return self.current_status, False, self.is_recording
+            return self._process_frame_locked(
+                chunk, level_dbfs, speech_prob, speech_confirmed=speech_confirmed,
+                candidate=candidate, event_active=event_active, radio_activity=radio_activity,
+                confidence=confidence, metrics=metrics, vad_backend=vad_backend,
+                return_to_ambient=return_to_ambient)
+
+    def _process_frame_locked(self, chunk, level_dbfs, speech_prob, *, speech_confirmed=None,
+                              candidate=False, event_active=False, radio_activity=False,
+                              confidence=None, metrics=None, vad_backend="unknown",
+                              return_to_ambient=None):
         chunk = np.asarray(chunk, dtype=np.float32)
         if speech_confirmed is None:
             speech_confirmed = False
@@ -89,6 +172,8 @@ class AudioRecorderEngine:
             communication_id, start_iso = self._new_id()
             self.recorded_chunks = [x.copy() for x in self.pre_buffer]
             self.total_samples = sum(map(len, self.recorded_chunks))
+            self._open_spool(communication_id, start_iso)
+            self._append_spool(self.recorded_chunks)
             self.session_start_sample = 0
             self.session_manager.open(communication_id, start_iso, 0)
             self.is_recording = True
@@ -101,6 +186,10 @@ class AudioRecorderEngine:
             return self.current_status, True, True
 
         self.recorded_chunks.append(chunk.copy())
+        # Keep only a small compatibility/debug window; the spool is canonical.
+        if len(self.recorded_chunks) > 64:
+            self.recorded_chunks.pop(0)
+        self._append_spool([chunk])
         start, end = self.total_samples, self.total_samples + len(chunk)
         self.total_samples = end
         if metrics:
@@ -144,11 +233,22 @@ class AudioRecorderEngine:
 
     def _save_active_session(self, reason="ambient_timeout"):
         session = self.session_manager.finish(reason)
-        if not session or not self.recorded_chunks:
+        if not session or self.total_samples <= 0:
             self._clear(); return
-        raw = np.concatenate(self.recorded_chunks)
+        if self._spool_file is not None:
+            self._spool_file.flush(); os.fsync(self._spool_file.fileno()); self._spool_file.close()
+            self._spool_file = None
+        if self._spool_path and os.path.exists(self._spool_path):
+            count = os.path.getsize(self._spool_path) // np.dtype(np.float32).itemsize
+            raw = np.memmap(self._spool_path, dtype=np.float32, mode="r", shape=(count,))
+        else:
+            raw = np.concatenate(self.recorded_chunks)
         speech_samples = sum(t.speech_samples for t in session.transmissions)
-        if speech_samples < int(self.config.minimum_total_speech_ms * self.sample_rate / 1000):
+        if (reason != "manual_stop" and
+                speech_samples < int(self.config.minimum_total_speech_ms * self.sample_rate / 1000)):
+            if isinstance(raw, np.memmap):
+                del raw
+            self._discard_spool(session.communication_id)
             self._clear(); return
         all_segments = [[s.start_sample, s.end_sample] for t in session.transmissions for s in t.speech_segments]
         # Retain the circular lead-in so delayed VAD confirmation cannot clip
@@ -157,16 +257,15 @@ class AudioRecorderEngine:
         result = (trim_to_speech(raw, all_segments, self.sample_rate, trim_margin)
                   if self.config.auto_trim_silence else trim_to_speech(raw, [[0, len(raw)]], self.sample_rate, 0))
         if not len(result.samples):
+            if isinstance(raw, np.memmap):
+                del raw
+            self._discard_spool(session.communication_id)
             self._clear(); return
         trim_offset = round(result.leading_seconds * self.sample_rate)
         wav_path = os.path.join(self.recordings_dir, session.communication_id + ".wav")
         pcm = (np.clip(result.samples, -1, 1) * 32767).astype(np.int16)
         self.current_status = "saving_communication"
-        if sf is not None:
-            sf.write(wav_path, pcm, self.sample_rate, subtype="PCM_16")
-        else:
-            with wave.open(wav_path, "wb") as wf:
-                wf.setparams((1, 2, self.sample_rate, 0, "NONE", "not compressed")); wf.writeframes(pcm.tobytes())
+        self._write_wav_atomic(wav_path, pcm, self.sample_rate, pcm16=True)
         def avg(key):
             values = [float(m[key]) for m in self.metrics if m.get(key) is not None]
             return round(sum(values) / len(values), 2) if values else None
@@ -196,6 +295,9 @@ class AudioRecorderEngine:
             speech_segment_count=len(all_segments), transmission_count=len(transmissions), transmissions=transmissions,
             inter_transmission_gap_seconds=gaps, communication_end_reason=reason)
         save_metadata(meta, self.recordings_dir)
+        if isinstance(raw, np.memmap):
+            del raw
+        self._discard_spool(session.communication_id)
         self._clear()
         if self.on_recording_finished:
             self.on_recording_finished(meta, wav_path)
@@ -208,10 +310,33 @@ class AudioRecorderEngine:
         self._save_active_session("manual_stop")
 
     def _clear(self):
+        if self._spool_file is not None:
+            self._spool_file.close(); self._spool_file = None
         self.recorded_chunks = []; self.total_samples = 0; self.metrics = []
         self.transmission_manager.reset(); self.segmenter.reset(); self.radio_activity_samples = 0
         self.meaningful_radio_samples = 0; self.is_recording = False
         self.event_buffer_samples = 0
+
+    def _discard_spool(self, recording_id=None):
+        paths = [self._spool_path]
+        if recording_id:
+            paths.append(os.path.join(self.recordings_dir, recording_id + ".recording.json.part"))
+        for path in paths:
+            if path and os.path.exists(path):
+                os.remove(path)
+        self._spool_path = None
+
+    @staticmethod
+    def _write_wav_atomic(wav_path, samples, sample_rate, pcm16=False):
+        temporary = wav_path + ".part"
+        pcm = samples if pcm16 else (np.clip(samples, -1, 1) * 32767).astype(np.int16)
+        if sf is not None:
+            sf.write(temporary, pcm, sample_rate, subtype="PCM_16", format="WAV")
+        else:
+            with wave.open(temporary, "wb") as wf:
+                wf.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+                wf.writeframes(np.asarray(pcm, dtype=np.int16).tobytes())
+        os.replace(temporary, wav_path)
 
     def session_telemetry(self):
         session = self.session_manager.session
@@ -232,9 +357,11 @@ class AudioRecorderEngine:
         }
 
     def stop_and_flush(self):
-        if self.is_recording:
-            pending = self.transmission_manager.flush()
-            if pending:
-                self.session_manager.add(pending)
-            self._save_active_session("manual_stop")
-        self.pre_buffer.clear(); self.pre_buffer_samples = 0; self._clear(); self.current_status = "idle"
+        with self._lock:
+            self._accepting_frames = False
+            if self.is_recording:
+                pending = self.transmission_manager.flush()
+                if pending:
+                    self.session_manager.add(pending)
+                self._save_active_session("manual_stop")
+            self.pre_buffer.clear(); self.pre_buffer_samples = 0; self._clear(); self.current_status = "idle"
