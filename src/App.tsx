@@ -768,6 +768,31 @@ export default function App() {
                 <StatusIndicator status={status} durationSec={durationSec} />
               </div>
 
+              {/* Keep the live decisions visible while the telemetry panel scrolls. */}
+              <div
+                className="sticky top-2 z-30 grid grid-cols-3 gap-1.5 sm:gap-2 rounded border border-[#25272D] bg-[#111215]/95 p-1.5 shadow-lg backdrop-blur-sm"
+                aria-label="Voice decision indicators"
+              >
+                {([
+                  ['EVENT', Boolean(telemetry?.event_active)],
+                  ['VOICE', Boolean(telemetry?.effective_speech_confirmed)],
+                ] as const).map(([label, active]) => (
+                  <div
+                    key={label}
+                    className={`min-w-0 rounded border px-1 py-2 text-center text-[10px] font-bold sm:px-2 ${active ? 'border-[#00FF88] bg-[#00FF88]/10 text-[#00FF88]' : 'border-[#303238] text-[#707070]'}`}
+                  >
+                    {label} {active ? 'ON' : 'OFF'}
+                  </div>
+                ))}
+                <div
+                  className={`min-w-0 rounded border px-1 py-2 text-center text-[10px] font-bold sm:px-2 ${telemetry?.recording ? 'border-[#FF4444] bg-[#FF4444]/15 text-[#FF5555] shadow-[0_0_10px_rgba(255,68,68,0.25)]' : 'border-[#303238] text-[#707070]'}`}
+                  aria-live="polite"
+                >
+                  {telemetry?.recording && <span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#FF4444] align-middle shadow-[0_0_6px_#FF4444] animate-pulse" aria-hidden="true" />}
+                  REC {telemetry?.recording ? `ON ${durationSec.toFixed(1)}s` : 'OFF'}
+                </div>
+              </div>
+
               {/* Informative Sound Card & Live Acquisition Banner */}
               <div id="soundcard-status-slot" className="min-h-[5.25rem] overflow-anchor-none">
               {deviceReconnecting ? (
@@ -826,19 +851,6 @@ export default function App() {
                 analyserNode={null}
                 sampleRate={settings.sample_rate}
               />
-
-              {isMonitoring && (() => {
-                const badges = [
-                  ['EVENT', Boolean(telemetry?.event_active)],
-                  ['VOICE', Boolean(telemetry?.effective_speech_confirmed)],
-                  ['REC', Boolean(telemetry?.recording)],
-                ] as const;
-                return <div className="grid grid-cols-3 gap-2" aria-label="Voice decision indicators">
-                  {badges.map(([label, active]) => <div key={label} className={`p-2 text-center border rounded text-[10px] font-bold ${active ? 'border-[#00FF88] text-[#00FF88] bg-[#00FF88]/10' : 'border-[#303238] text-[#707070]'}`}>
-                    {label} {active ? 'ON' : 'OFF'}
-                  </div>)}
-                </div>;
-              })()}
 
               {isMonitoring && (
                 <details className="p-3 bg-[#0A0B0D] border border-[#1A1B1F] rounded text-[10px]">
