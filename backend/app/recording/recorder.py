@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import time
 import wave
 from collections import deque
 from datetime import datetime, timezone
@@ -20,6 +21,9 @@ try:
     import soundfile as sf
 except ImportError:  # pragma: no cover
     sf = None
+
+
+SPOOL_FSYNC_INTERVAL_SECONDS = 300
 
 
 class AudioRecorderEngine:
@@ -44,6 +48,7 @@ class AudioRecorderEngine:
         self._accepting_frames = True
         self._spool_path = None
         self._spool_file = None
+        self._last_spool_fsync = None
         self._recover_interrupted_recordings()
         self._configure_managers()
 
@@ -98,6 +103,9 @@ class AudioRecorderEngine:
                        "device": self.config.device_name or "Audio Device"}, handle)
             handle.flush(); os.fsync(handle.fileno())
         self._spool_file = open(self._spool_path, "wb")
+        # Each communication gets its own durability interval. A monotonic
+        # clock prevents wall-clock corrections from delaying synchronization.
+        self._last_spool_fsync = time.monotonic()
 
     def _append_spool(self, chunks):
         if self._spool_file is None:
@@ -107,6 +115,17 @@ class AudioRecorderEngine:
         # Python's buffer is flushed for every capture frame. The OS can then
         # persist it progressively rather than keeping a whole session in RAM.
         self._spool_file.flush()
+        now = time.monotonic()
+        if (self._last_spool_fsync is not None and
+                now - self._last_spool_fsync >= SPOOL_FSYNC_INTERVAL_SECONDS):
+            try:
+                os.fsync(self._spool_file.fileno())
+            except OSError as exc:
+                # Keep recording and preserve the spool for recovery. Advance
+                # the interval so a failing disk is not hammered every frame.
+                print(f"[RECORDER] Periodic spool fsync failed for {self._spool_path}: {exc}")
+            finally:
+                self._last_spool_fsync = now
 
     def _configure_managers(self):
         self.transmission_manager = TransmissionManager(
@@ -236,7 +255,18 @@ class AudioRecorderEngine:
         if not session or self.total_samples <= 0:
             self._clear(); return
         if self._spool_file is not None:
-            self._spool_file.flush(); os.fsync(self._spool_file.fileno()); self._spool_file.close()
+            try:
+                # Finalization always has its own durability barrier, even if
+                # a periodic fsync happened only moments ago.
+                self._spool_file.flush()
+                os.fsync(self._spool_file.fileno())
+            except OSError as exc:
+                print(f"[RECORDER] Final spool fsync failed; preserving {self._spool_path}: {exc}")
+                self._spool_file.close()
+                self._spool_file = None
+                self._clear()
+                return
+            self._spool_file.close()
             self._spool_file = None
         if self._spool_path and os.path.exists(self._spool_path):
             count = os.path.getsize(self._spool_path) // np.dtype(np.float32).itemsize
@@ -316,6 +346,7 @@ class AudioRecorderEngine:
         self.transmission_manager.reset(); self.segmenter.reset(); self.radio_activity_samples = 0
         self.meaningful_radio_samples = 0; self.is_recording = False
         self.event_buffer_samples = 0
+        self._last_spool_fsync = None
 
     def _discard_spool(self, recording_id=None):
         paths = [self._spool_path]
