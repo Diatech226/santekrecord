@@ -89,6 +89,7 @@ def test_disconnect_finalizes_recording_and_publishes_stopped_engine(tmp_path):
     source = engine.source = type("Source", (), {"stop": lambda self: None, "is_active": True})()
     engine._is_running = True
     engine._monitor_requested = False
+    engine.current_event_active = True
     updates = []
     engine.subscribe(updates.append)
     with patch.object(engine.recorder, "stop_and_flush") as finalize:
@@ -98,6 +99,32 @@ def test_disconnect_finalizes_recording_and_publishes_stopped_engine(tmp_path):
     assert updates[-1]["engine_running"] is False
     assert updates[-1]["device_connected"] is False
     assert updates[-1]["status"] == "device_disconnected"
+    assert updates[-1]["event_active"] is False
+
+
+def test_stop_clears_active_detection_indicators_before_broadcast(tmp_path):
+    engine = MainAudioEngine(AppConfig(device_id=8, device_name="USB"), str(tmp_path))
+    engine._is_running = True
+    engine.current_event_active = True
+    engine.current_radio_activity = True
+    engine.current_radio_activity_score = .8
+    engine.current_speech_candidate = True
+    engine.current_speech_confirmed = True
+    engine.effective_speech_confirmed = True
+    updates = []
+    engine.subscribe(updates.append)
+
+    with patch.object(engine.recorder, "stop_and_flush") as finalize:
+        engine.stop()
+
+    finalize.assert_called_once()
+    assert updates[-1]["status"] == "idle"
+    assert updates[-1]["engine_running"] is False
+    assert updates[-1]["event_active"] is False
+    assert updates[-1]["radio_activity"] is False
+    assert updates[-1]["speech_candidate"] is False
+    assert updates[-1]["speech_confirmed"] is False
+    assert updates[-1]["effective_speech_confirmed"] is False
 
 
 def test_telemetry_distinguishes_requested_monitor_from_running_engine(tmp_path):
