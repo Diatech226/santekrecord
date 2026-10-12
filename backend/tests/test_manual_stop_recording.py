@@ -1,6 +1,8 @@
 import json
+import os
 import threading
 import wave
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -150,3 +152,147 @@ def test_interrupted_spool_is_recovered_atomically_on_restart(tmp_path):
     metadata = json.loads(next(tmp_path.glob("*-recovered.json")).read_text())
     assert metadata["communication_end_reason"] == "interrupted_recovery"
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_spool_fsync_runs_once_per_five_minute_interval(monkeypatch, tmp_path):
+    clock = {"now": 0.0}
+    monkeypatch.setattr("backend.app.recording.recorder.time.monotonic", lambda: clock["now"])
+    fsync = Mock(wraps=os.fsync)
+    monkeypatch.setattr("backend.app.recording.recorder.os.fsync", fsync)
+    rec = recorder(tmp_path)
+
+    send(rec)
+    initial_calls = fsync.call_count  # The manifest itself is made durable.
+    clock["now"] = 299.999
+    send(rec)
+    assert fsync.call_count == initial_calls
+
+    clock["now"] = 300.0
+    send(rec)
+    assert fsync.call_count == initial_calls + 1
+    send(rec)
+    send(rec)
+    assert fsync.call_count == initial_calls + 1
+
+    clock["now"] = 600.0
+    send(rec)
+    assert fsync.call_count == initial_calls + 2
+
+
+def test_new_recording_resets_periodic_fsync_clock(monkeypatch, tmp_path):
+    clock = {"now": 0.0}
+    monkeypatch.setattr("backend.app.recording.recorder.time.monotonic", lambda: clock["now"])
+    fsync = Mock(wraps=os.fsync)
+    monkeypatch.setattr("backend.app.recording.recorder.os.fsync", fsync)
+    rec = recorder(tmp_path)
+    send(rec)
+    clock["now"] = 300.0
+    send(rec)
+    rec.stop_and_flush()
+
+    rec.resume()
+    clock["now"] = 1000.0
+    send(rec)
+    new_recording_calls = fsync.call_count
+    clock["now"] = 1299.999
+    send(rec)
+    assert fsync.call_count == new_recording_calls
+    clock["now"] = 1300.0
+    send(rec)
+    assert fsync.call_count == new_recording_calls + 1
+
+
+def test_manual_stop_forces_fsync_after_recent_periodic_sync(monkeypatch, tmp_path):
+    clock = {"now": 0.0}
+    monkeypatch.setattr("backend.app.recording.recorder.time.monotonic", lambda: clock["now"])
+    fsync_targets = []
+    real_fsync = os.fsync
+
+    def tracked_fsync(fd):
+        fsync_targets.append(os.readlink(f"/proc/self/fd/{fd}"))
+        real_fsync(fd)
+
+    fsync = Mock(side_effect=tracked_fsync)
+    monkeypatch.setattr("backend.app.recording.recorder.os.fsync", fsync)
+    rec = recorder(tmp_path)
+    send(rec)
+    clock["now"] = 300.0
+    send(rec)
+    calls_after_periodic_sync = fsync.call_count
+
+    clock["now"] = 301.0
+    rec.stop_and_flush()
+
+    # The spool sync is followed by the metadata sync; distinguish them by
+    # their targets to prove STOP forced the former.
+    assert fsync.call_count == calls_after_periodic_sync + 2
+    assert fsync_targets[-2].endswith(".pcm.part")
+    assert fsync_targets[-1].endswith(".json.part")
+    assert len(list(tmp_path.glob("*.wav"))) == 1
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_automatic_end_forces_final_fsync(monkeypatch, tmp_path):
+    monkeypatch.setattr("backend.app.recording.recorder.time.monotonic", lambda: 10.0)
+    fsync_targets = []
+    real_fsync = os.fsync
+
+    def tracked_fsync(fd):
+        fsync_targets.append(os.readlink(f"/proc/self/fd/{fd}"))
+        real_fsync(fd)
+
+    fsync = Mock(side_effect=tracked_fsync)
+    monkeypatch.setattr("backend.app.recording.recorder.os.fsync", fsync)
+    rec = recorder(
+        tmp_path,
+        intra_phrase_pause_seconds=.1,
+        transmission_end_timeout_seconds=.1,
+        communication_end_timeout_seconds=.5,
+        ambient_confirm_ms=20,
+    )
+    for _ in range(5):
+        send(rec)
+    calls_while_active = fsync.call_count
+
+    for _ in range(12):
+        send(rec, 0, speech=False)
+        if not rec.is_recording:
+            break
+
+    assert not rec.is_recording
+    assert fsync.call_count == calls_while_active + 2
+    assert fsync_targets[-2].endswith(".pcm.part")
+    assert fsync_targets[-1].endswith(".json.part")
+    assert len(list(tmp_path.glob("*.wav"))) == 1
+    metadata = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert metadata["communication_end_reason"] == "ambient_timeout"
+
+
+def test_periodic_fsync_failure_keeps_recording_and_spool(monkeypatch, tmp_path, capsys):
+    clock = {"now": 0.0}
+    monkeypatch.setattr("backend.app.recording.recorder.time.monotonic", lambda: clock["now"])
+    rec = recorder(tmp_path)
+    send(rec)
+    monkeypatch.setattr("backend.app.recording.recorder.os.fsync", Mock(side_effect=OSError("disk busy")))
+
+    clock["now"] = 300.0
+    send(rec)
+
+    assert rec.is_recording
+    assert list(tmp_path.glob("*.pcm.part"))
+    assert "Periodic spool fsync failed" in capsys.readouterr().out
+
+
+def test_final_fsync_failure_does_not_publish_or_delete_spool(monkeypatch, tmp_path, capsys):
+    rec = recorder(tmp_path)
+    send(rec)
+    monkeypatch.setattr("backend.app.recording.recorder.os.fsync", Mock(side_effect=OSError("disk busy")))
+
+    rec.stop_and_flush()
+
+    assert not list(tmp_path.glob("*.wav"))
+    assert not list(tmp_path.glob("*.json"))
+    assert len(list(tmp_path.glob("*.pcm.part"))) == 1
+    assert len(list(tmp_path.glob("*.recording.json.part"))) == 1
+    assert "Final spool fsync failed" in capsys.readouterr().out

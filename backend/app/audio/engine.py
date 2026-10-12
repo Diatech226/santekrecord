@@ -184,6 +184,15 @@ class MainAudioEngine:
         return effective
 
     def _reset_detection_state(self) -> None:
+        # These values describe the latest processed frame. Once monitoring is
+        # stopped (or the input disappears), keeping them set would make the
+        # telemetry claim that an event/voice/radio signal is still active.
+        self.current_event_active = False
+        self.current_radio_activity = False
+        self.current_radio_activity_score = 0.0
+        self.current_speech_candidate = False
+        self.current_speech_confirmed = False
+        self.current_speech_reject_reason = "vad_too_low"
         self.effective_speech_confirmed = False
         self.ambient_learning_paused_for_voice = False
 
@@ -556,6 +565,7 @@ class MainAudioEngine:
         else:
             self.recorder.stop_and_flush()
         self.current_voice_detected = False
+        self._reset_detection_state()
         self._broadcast(self.get_telemetry())
         with self._capture_lock:
             if (self._monitor_requested

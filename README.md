@@ -25,6 +25,73 @@ Application web locale minimaliste et professionnelle pour **Linux** permettant 
 
 ---
 
+## 🤖 Est-ce une application d'intelligence artificielle ?
+
+**Oui, au sens où SantekRecord utilise localement un modèle d'apprentissage
+automatique pour reconnaître la présence de voix, mais ce n'est pas une IA
+générative.**
+
+Le backend utilise en priorité **Silero VAD**, un réseau neuronal de détection
+d'activité vocale. Il produit une probabilité de présence de parole à partir du
+signal audio. Cette probabilité est ensuite combinée à des traitements
+classiques et déterministes : niveau RMS/dBFS, rapport signal/bruit, analyse
+spectrale, temporisations et machine d'état des communications.
+
+SantekRecord ne réalise actuellement ni transcription, ni résumé, ni
+identification du locuteur. Il ne crée pas de contenu et n'envoie pas les
+enregistrements à un service d'IA distant. Il est donc plus précis de le décrire
+comme un **enregistreur automatique assisté par un modèle d'IA local** que comme
+un assistant conversationnel ou une IA générative.
+
+Si le modèle Silero local est absent ou inutilisable, le monitoring reste
+disponible grâce à un détecteur acoustique de secours. Ce fallback analyse des
+caractéristiques du signal sans appeler de service externe ; sa détection peut
+toutefois être moins précise que celle de Silero.
+
+## 🌐 Fonctionnement sans Internet
+
+**Oui. Une fois l'application installée et le modèle Silero présent sur la
+machine, toutes les fonctions d'exploitation peuvent fonctionner sans connexion
+Internet :**
+
+- capture depuis le microphone, une carte son USB ou GNU Radio ;
+- détection de voix avec Silero ONNX exécuté par `onnxruntime` sur le PC ;
+- fallback acoustique local si le modèle n'est pas disponible ;
+- enregistrement et récupération des fichiers `.pcm.part` ;
+- création des WAV et des métadonnées JSON dans `recordings/` ;
+- interface web, API REST et télémétrie WebSocket sur la machine locale.
+
+Le navigateur communique encore avec les ports locaux `3000` et `8000`, mais
+cela utilise la boucle locale ou le réseau local, **pas Internet**. Aucun compte
+cloud ni aucune clé d'API d'IA n'est nécessaire pour enregistrer et détecter la
+voix.
+
+Une connexion Internet est normalement requise uniquement pour la préparation
+initiale ou une mise à jour : clonage du dépôt, installation des paquets Python
+et npm, et premier téléchargement du modèle Silero. `start_kali.sh` réutilise
+ensuite les dépendances et le modèle validé déjà présents. Pour préparer un PC
+totalement isolé, installez ces éléments et vérifiez le modèle avant de le
+déconnecter :
+
+```bash
+./setup_kali.sh
+./start_kali.sh
+```
+
+Dans les diagnostics de l'interface, le fonctionnement optimal hors ligne est
+confirmé par :
+
+```text
+vad_backend = silero_onnx
+vad_model_loaded = true
+```
+
+Si `vad_backend = acoustic_fallback`, l'application reste locale et
+fonctionnelle, mais elle utilise le détecteur de secours. Le détail de l'absence
+ou de l'échec du modèle est exposé dans les diagnostics du backend.
+
+---
+
 ## 🏗️ Architecture du Projet
 
 ```
