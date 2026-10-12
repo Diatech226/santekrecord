@@ -12,7 +12,7 @@ Application web locale minimaliste et professionnelle pour **Linux** permettant 
   3. **HackRF / GNU Radio** (lecture directe de flux `float32` mono 16 kHz depuis `/tmp/hackrf_audio.f32`)
 - **Moteur de Détection Intelligent** :
   - **RMS / dBFS** : calcul en temps réel du niveau sonore (`20 * log10(RMS)`).
-  - **Silero VAD** : probabilité de présence de voix humaine (0.00 à 1.00) avec modèle PyTorch et fallback acoustique formant.
+  - **Silero VAD local** : probabilité de présence de voix humaine (0.00 à 1.00) avec modèle ONNX et fallback acoustique.
   - **Chemins séparés** : `RAW LEVEL -> EVENT GATE` pour la télémétrie, et `GAIN/AGC -> SILERO -> SPEECH -> REC` pour la décision. Le gate n'a aucun droit de veto sur une voix confirmée.
 - **Enregistrement Automatisé** :
   - **Pre-buffer circulaire** : conserve 1 seconde (configurable de 0 à 5s) avant la détection pour ne jamais couper le début de phrase.
@@ -20,6 +20,11 @@ Application web locale minimaliste et professionnelle pour **Linux** permettant 
   - **Format standard** : WAV PCM16 16000 Hz mono + fichier JSON de métadonnées complet.
 - **Calibration Automatique du Bruit de Fond** :
   - Accumule 3 secondes d'audio calme vérifié (la voix suspend la mesure) et applique la marge recommandée au gate RAW.
+  - Enregistre un profil du bruit ambiant par périphérique et l'adapte aux variations de l'environnement.
+  - Cette adaptation ne réentraîne pas Silero et n'apprend pas les voix des utilisateurs : le modèle de détection reste fixe.
+- **Fonctionnement local** :
+  - Après l'installation des dépendances et du modèle Silero, la capture, la détection, l'interface et la sauvegarde fonctionnent sans Internet.
+  - Aucun enregistrement n'est envoyé à un service distant. Si Silero est indisponible, le fallback acoustique local maintient le monitoring avec une précision potentiellement moindre.
 - **Interface Minimaliste & Technique** :
   - Dark mode sobre, bargraph LED segmenté avec repère de seuil, badge d'état temps réel, lecteur audio intégré avec scrubbing, historique des enregistrements et visionneuse de métadonnées.
 
