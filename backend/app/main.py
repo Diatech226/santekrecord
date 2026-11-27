@@ -40,6 +40,11 @@ async def ws_monitor(websocket: WebSocket):
     await websocket_monitor_endpoint(websocket, audio_engine)
 
 
+@app.websocket("/ws/audio")
+async def ws_audio(websocket: WebSocket):
+    await websocket_monitor_endpoint(websocket, audio_engine, audio=True)
+
+
 @app.on_event("shutdown")
 def on_shutdown():
     print("[Main] Shutting down audio engine...")

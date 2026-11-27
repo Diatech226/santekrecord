@@ -37,6 +37,8 @@ class AudioRecorderEngine:
         self.pre_buffer_samples = self.total_samples = 0
         self.event_buffer_samples = 0
         self.is_recording = False
+        self.manual_recording = False
+        self._wait_for_voice_end = False
         self.current_status = "idle"
         self.metrics = []
         self.segmenter = SpeechSegmenter()  # compatibility for legacy integrations
@@ -80,6 +82,9 @@ class AudioRecorderEngine:
                     duration_seconds=round(count / int(manifest["sample_rate"]), 3),
                     saved_duration_seconds=round(count / int(manifest["sample_rate"]), 3),
                     raw_event_duration_seconds=round(count / int(manifest["sample_rate"]), 3),
+                    trigger_mode=manifest.get("trigger_mode", "confirmed_voice"),
+                    frequency_hz=manifest.get("frequency_hz") if manifest.get("source") in ("hackrf", "gnuradio") else None,
+                    modulation=manifest.get("modulation") if manifest.get("source") in ("hackrf", "gnuradio") else None,
                     communication_end_reason="interrupted_recovery",
                 )
                 save_metadata(meta, self.recordings_dir)
@@ -94,18 +99,61 @@ class AudioRecorderEngine:
         with self._lock:
             self._accepting_frames = True
 
-    def _open_spool(self, recording_id, start_iso):
+    def suspend_for_capture_change(self):
+        with self._lock:
+            if self.is_recording:
+                raise ValueError("Arrêtez l’enregistrement avant de changer la réception.")
+            self._accepting_frames = False
+
+    def start_manual(self):
+        with self._lock:
+            if not self._accepting_frames:
+                raise ValueError("La réception audio est arrêtée.")
+            if self.manual_recording:
+                return
+            if not self.is_recording:
+                recording_id, start_iso = self._new_id()
+                self._open_spool(recording_id, start_iso, trigger_mode="manual")
+                self.session_manager.open(recording_id, start_iso, 0)
+                self.session_start_sample = 0
+                self._vad_backend = "unknown"
+                self.is_recording = True
+            else:
+                session = self.session_manager.session
+                self._write_manifest(session.communication_id, session.start_iso, "voice_then_manual")
+                self._trigger_mode = "voice_then_manual"
+            self.manual_recording = True
+            self.current_status = "communication_active"
+
+    def stop_recording(self):
+        with self._lock:
+            if self.is_recording:
+                self._save_active_recording()
+                self.pre_buffer.clear()
+                self.pre_buffer_samples = 0
+                self.current_status = "listening"
+                self._wait_for_voice_end = True
+
+    def _open_spool(self, recording_id, start_iso, trigger_mode="confirmed_voice"):
+        self._trigger_mode = trigger_mode
+        self._write_manifest(recording_id, start_iso, trigger_mode)
         self._spool_path = os.path.join(self.recordings_dir, recording_id + ".pcm.part")
-        manifest_path = os.path.join(self.recordings_dir, recording_id + ".recording.json.part")
-        with open(manifest_path, "w", encoding="utf-8") as handle:
-            json.dump({"recording_id": recording_id, "timestamp_start": start_iso,
-                       "sample_rate": self.sample_rate, "source": self.config.source,
-                       "device": self.config.device_name or "Audio Device"}, handle)
-            handle.flush(); os.fsync(handle.fileno())
         self._spool_file = open(self._spool_path, "wb")
         # Each communication gets its own durability interval. A monotonic
         # clock prevents wall-clock corrections from delaying synchronization.
         self._last_spool_fsync = time.monotonic()
+
+    def _write_manifest(self, recording_id, start_iso, trigger_mode):
+        manifest = os.path.join(self.recordings_dir, recording_id + ".recording.json.part")
+        with open(manifest + ".tmp", "w", encoding="utf-8") as handle:
+            json.dump({"recording_id": recording_id, "timestamp_start": start_iso,
+                       "sample_rate": self.sample_rate, "source": self.config.source,
+                       "device": self.config.device_name or "Audio Device",
+                       "frequency_hz": self.config.frequency_hz,
+                       "modulation": self.config.modulation, "trigger_mode": trigger_mode}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(manifest + ".tmp", manifest)
 
     def _append_spool(self, chunks):
         if self._spool_file is None:
@@ -177,6 +225,10 @@ class AudioRecorderEngine:
             speech_confirmed = False
         if return_to_ambient is None:
             return_to_ambient = not speech_confirmed and speech_prob <= self.config.vad_stop_threshold
+        if not self.is_recording and self._wait_for_voice_end:
+            if speech_confirmed:
+                return self.current_status, True, False
+            self._wait_for_voice_end = False
         self._push_prebuffer(chunk)
 
         if not self.is_recording:
@@ -204,6 +256,7 @@ class AudioRecorderEngine:
             self.current_status = "communication_active"
             return self.current_status, True, True
 
+        self._vad_backend = vad_backend
         self.recorded_chunks.append(chunk.copy())
         # Keep only a small compatibility/debug window; the spool is canonical.
         if len(self.recorded_chunks) > 64:
@@ -234,7 +287,7 @@ class AudioRecorderEngine:
             end, bool(speech_confirmed), False, return_to_ambient, self.session_start_sample,
             meaningful_radio_activity=meaningful_radio_activity,
             transmission_active=self.transmission_manager.current is not None)
-        if reason:
+        if reason and not self.manual_recording:
             pending = self.transmission_manager.flush()
             if pending:
                 self.session_manager.add(pending)
@@ -253,6 +306,8 @@ class AudioRecorderEngine:
     def _save_active_session(self, reason="ambient_timeout"):
         session = self.session_manager.finish(reason)
         if not session or self.total_samples <= 0:
+            if session:
+                self._discard_spool(session.communication_id)
             self._clear(); return
         if self._spool_file is not None:
             try:
@@ -285,7 +340,7 @@ class AudioRecorderEngine:
         # the beginning of a word or phrase.
         trim_margin = max(self.config.trim_margin_seconds, self.config.preroll_seconds)
         result = (trim_to_speech(raw, all_segments, self.sample_rate, trim_margin)
-                  if self.config.auto_trim_silence else trim_to_speech(raw, [[0, len(raw)]], self.sample_rate, 0))
+                  if self.config.auto_trim_silence and not self.manual_recording else trim_to_speech(raw, [[0, len(raw)]], self.sample_rate, 0))
         if not len(result.samples):
             if isinstance(raw, np.memmap):
                 del raw
@@ -307,12 +362,12 @@ class AudioRecorderEngine:
             source=self.config.source, device=self.config.device_name or "Audio Device",
             sample_rate=self.sample_rate, channels=1, timestamp_start=session.start_iso,
             timestamp_end=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            duration_seconds=round(len(result.samples)/self.sample_rate, 3), trigger_mode="confirmed_voice",
+            duration_seconds=round(len(result.samples)/self.sample_rate, 3), trigger_mode=getattr(self, "_trigger_mode", "confirmed_voice"),
             trigger_threshold_dbfs=avg("dynamic_threshold_dbfs"),
             vad_threshold=self.config.vad_start_threshold,
-            frequency_hz=self.config.frequency_hz if self.config.source == "gnuradio" else None,
-            modulation=self.config.modulation if self.config.source == "gnuradio" else None,
-            station_id=self.config.station_id if self.config.source == "gnuradio" else None,
+            frequency_hz=self.config.frequency_hz if self.config.source in ("gnuradio", "hackrf") else None,
+            modulation=self.config.modulation if self.config.source in ("gnuradio", "hackrf") else None,
+            station_id=self.config.station_id if self.config.source in ("gnuradio", "hackrf") else None,
             profile=self.config.detection_profile, noise_floor_dbfs=avg("noise_floor_dbfs"),
             dynamic_threshold_dbfs=avg("dynamic_threshold_dbfs"), average_snr_db=avg("snr_db"),
             speech_band_snr_db=avg("speech_band_snr_db"), vad_backend=getattr(self, "_vad_backend", "unknown"),
@@ -346,6 +401,7 @@ class AudioRecorderEngine:
         self.transmission_manager.reset(); self.segmenter.reset(); self.radio_activity_samples = 0
         self.meaningful_radio_samples = 0; self.is_recording = False
         self.event_buffer_samples = 0
+        self.manual_recording = False
         self._last_spool_fsync = None
 
     def _discard_spool(self, recording_id=None):
@@ -375,6 +431,7 @@ class AudioRecorderEngine:
         last = self.transmission_manager.last_speech_end
         return {
             "communication_active": bool(session),
+            "manual_recording": self.manual_recording,
             "communication_id": session.communication_id if session else None,
             "current_transmission": current if session else 0,
             "transmission_count": (len(session.transmissions) + bool(self.transmission_manager.current)) if session else 0,
@@ -390,6 +447,7 @@ class AudioRecorderEngine:
     def stop_and_flush(self):
         with self._lock:
             self._accepting_frames = False
+            self._wait_for_voice_end = False
             if self.is_recording:
                 pending = self.transmission_manager.flush()
                 if pending:

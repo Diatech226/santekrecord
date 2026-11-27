@@ -61,7 +61,7 @@ export function reconcileSelectedDevice(
   freshDevices: AudioDevice[], settings: AppSettings,
   options: { allowFallback?: boolean } = {},
 ): Partial<AppSettings> {
-  if (settings.source === 'gnuradio') return {};
+  if (settings.source === 'gnuradio' || settings.source === 'hackrf') return {};
   const hasConfiguredIdentity = Boolean(settings.device_name);
   const exact = freshDevices.find(device =>
     String(device.id) === String(settings.device_id) && sameIdentity(device, settings));

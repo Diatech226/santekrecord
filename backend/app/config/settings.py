@@ -13,7 +13,7 @@ class AppConfig(BaseModel):
     config_version: int = Field(
         default=CURRENT_CONFIG_VERSION, ge=1, description="Persisted configuration schema version"
     )
-    source: Literal["microphone", "usb", "gnuradio"] = Field(
+    source: Literal["microphone", "usb", "gnuradio", "hackrf"] = Field(
         default="microphone", description="Active audio input source"
     )
     device_id: Optional[int] = Field(
@@ -70,6 +70,7 @@ class AppConfig(BaseModel):
     fifo_path: str = Field(
         default="/tmp/hackrf_audio.f32", description="FIFO named pipe path from GNU Radio"
     )
+    hackrf_serial: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{8,32}$")
     frequency_hz: Optional[int] = Field(
         default=145000000, description="Tuned SDR RF center frequency in Hz"
     )

@@ -9,7 +9,8 @@ Application web locale minimaliste et professionnelle pour **Linux** permettant 
 - **Multiples Sources Audio** :
   1. **Microphone** (détection automatique via `sounddevice` / ALSA / PulseAudio / Web Audio)
   2. **Carte son USB / Line-In** (sélection de l'interface d'entrée matérielle)
-  3. **HackRF / GNU Radio** (lecture directe de flux `float32` mono 16 kHz depuis `/tmp/hackrf_audio.f32`)
+  3. **HackRF USB** (réception NFM à fréquence fixe et écoute dans le navigateur)
+  4. **GNU Radio (FIFO)** (flux `float32` mono 16 kHz depuis `/tmp/hackrf_audio.f32`)
 - **Moteur de Détection Intelligent** :
   - **RMS / dBFS** : calcul en temps réel du niveau sonore (`20 * log10(RMS)`).
   - **Silero VAD local** : probabilité de présence de voix humaine (0.00 à 1.00) avec modèle ONNX et fallback acoustique.
@@ -292,6 +293,27 @@ Pour accéder à l'application depuis une autre machine du réseau, ouvrez les p
 
 ## 📻 Configuration HackRF & GNU Radio
 
+### HackRF One USB avec PortaPack Mayhem
+
+1. Sur Debian, Ubuntu ou Raspberry Pi OS 64 bits, installez les dépendances radio avec
+   `sudo apt install gnuradio gr-osmosdr hackrf`. Le récepteur utilise les modules GNU Radio
+   du Python système. Vérifiez-les avec `/usr/bin/python3 -c 'import gnuradio, osmosdr'`.
+2. Passez le PortaPack en **mode HackRF**, branchez-le en USB et vérifiez que `hackrf_info`
+   voit le numéro de série avec le compte qui lance SantekRecord. Fermez les autres logiciels SDR.
+3. Lancez SantekRecord avec `./start_kali.sh` après son installation. Dans le navigateur, sélectionnez
+   **HackRF USB**, choisissez le numéro de série et saisissez en MHz la fréquence d’un canal NFM
+   autorisé et actif. Cliquez sur **Appliquer · NFM** et vérifiez la fréquence affichée.
+4. Cliquez sur **Écouter en direct**, puis sur **Enregistrer** pendant un passage sans voix.
+   Activez **Muet** pendant la capture, cliquez sur **Arrêter**, puis ouvrez le WAV dans l’historique.
+   Vérifiez la lecture du fichier et ses métadonnées (fréquence, NFM, Manuel).
+5. Laissez une voix déclencher la capture automatique. Pendant la capture, cliquez sur
+   **Enregistrer**, puis sur **Arrêter** après une pause. Vérifiez qu’un seul WAV conserve
+   le début de la voix ainsi que la fin de la capture, avec le mode **Voix puis manuel**.
+
+La fréquence reste fixe pendant la capture. Le récepteur travaille en réception uniquement.
+
+### Entrée GNU Radio externe par FIFO
+
 Pour surveiller un signal RF (ex: VHF/UHF NFM) avec un HackRF :
 
 1. Créer le tube FIFO si inexistant :
@@ -307,7 +329,7 @@ Pour surveiller un signal RF (ex: VHF/UHF NFM) avec un HackRF :
    - `File Sink` : Chemin `/tmp/hackrf_audio.f32`, format `Float 32` (Unbuffered).
 
 3. Dans l'application web :
-   - Choisissez **Source** : `HackRF / GNU`
+   - Choisissez **GNU Radio (FIFO)** comme source
    - Le système lira automatiquement le flux RF démodulé et déclenchera l'enregistrement dès qu'une voix est captée sur la fréquence.
 
 ---
@@ -351,6 +373,10 @@ Chaque enregistrement génère automatiquement un fichier `.wav` et un fichier `
 - `PUT /api/settings` : Sauvegarde la configuration dans `data/config.json`
 - `POST /api/monitor/start` : Démarre la surveillance audio continue
 - `POST /api/monitor/stop` : Arrête la surveillance
+- `GET /api/audio/hackrf/devices` : Liste les HackRF One USB par numéro de série
+- `POST /api/recording/start` : Démarre une capture manuelle HackRF ou prolonge la capture vocale en cours
+- `POST /api/recording/stop` : Finalise la capture HackRF en gardant le récepteur actif
+- `WebSocket /ws/audio` : Flux d’écoute HackRF en PCM float32 mono à 16 kHz
 - `POST /api/calibrate` : accumule 3 secondes de bruit ambiant vérifié et recommande la marge du gate RAW
 - `GET /api/recordings` : Liste des enregistrements triés du plus récent au plus ancien
 - `GET /api/recordings/{id}` : Métadonnées d'un enregistrement

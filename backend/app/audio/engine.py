@@ -9,6 +9,7 @@ from .base import AudioSource
 from .microphone import MicrophoneSource
 from .soundcard import SoundCardSource
 from .gnuradio import GNURadioSource
+from .hackrf import HackRFSource
 from .alsa import ALSAArecordSource, match_alsa_device
 from .device_resolver import AudioDeviceIdentity, resolve_configured_device
 from ..detection.rms import RMSDetector
@@ -66,6 +67,7 @@ class MainAudioEngine:
         self._reconnect_identity: Optional[AudioDeviceIdentity] = None
         self._reconnect_device_id: Optional[int] = None
         self._monitor_generation = 0
+        self.control_lock = threading.RLock()
         self._capture_lock = threading.RLock()
 
         # Metrics for monitoring
@@ -328,6 +330,8 @@ class MainAudioEngine:
                   "device_max_input_channels", "device_default_samplerate",
                   "device_alsa_card_id", "device_alsa_device", "audio_backend",
                   "sample_rate", "input_channel", "fifo_path")
+        if "hackrf" in (old_config.source, new_config.source):
+            fields += ("hackrf_serial", "frequency_hz", "modulation")
         return any(getattr(old_config, field) != getattr(new_config, field) for field in fields)
 
     @staticmethod
@@ -337,23 +341,24 @@ class MainAudioEngine:
                   "ambient_return_spectral_threshold", "ambient_learning_seconds",
                   "ambient_learning_vad_max", "ambient_window_seconds", "adaptive_noise",
                   "adaptive_threshold", "speech_band_low_hz", "speech_band_high_hz",
-                  "detection_profile")
+                  "detection_profile", "sample_rate")
         return any(getattr(old_config, field) != getattr(new_config, field) for field in fields)
 
-    def update_config(self, new_config: AppConfig):
+    def update_config(self, new_config: AppConfig) -> Optional[bool]:
         capture_was_requested = self._is_running or self._monitor_requested
         restart_capture = (capture_was_requested and
                            self.requires_capture_restart(self.config, new_config))
         reconfigure_detection = self.requires_detection_reconfigure(self.config, new_config)
         if restart_capture:
+            if "hackrf" in (self.config.source, new_config.source):
+                self.recorder.suspend_for_capture_change()
             # Save/stop using the old identity before replacing the config.
             self.stop()
         self.config = new_config
         self.recorder.update_config(new_config)
         if reconfigure_detection:
             self._configure_detection_pipeline()
-        if restart_capture:
-            self.start()
+        return self.start() if restart_capture else None
 
     def _configured_identity(self) -> AudioDeviceIdentity:
         return AudioDeviceIdentity(
@@ -365,7 +370,7 @@ class MainAudioEngine:
         )
 
     def _resolve_capture_device(self) -> None:
-        if (self.config.source == "gnuradio" or
+        if (self.config.source in ("gnuradio", "hackrf") or
                 (self.config.device_id is None and not self.config.device_name)):
             return
         devices = MicrophoneSource.list_devices()
@@ -387,6 +392,15 @@ class MainAudioEngine:
         self.config.device_alsa_device = resolved.get("alsa_device")
 
     def _create_source(self) -> AudioSource:
+        if self.config.source == "hackrf":
+            frequency = self.config.frequency_hz
+            if frequency is None or not 1_000_000 <= frequency <= 6_000_000_000:
+                raise ValueError("Saisissez une fréquence entre 1 et 6 000 MHz.")
+            if self.config.modulation != "NFM":
+                raise ValueError("Le HackRF prend en charge la NFM pour ce jalon.")
+            if not self.config.hackrf_serial:
+                raise ValueError("Sélectionnez un HackRF One USB.")
+            return HackRFSource(self.config.hackrf_serial, frequency, self.config.sample_rate)
         if self.config.source == "microphone":
             return MicrophoneSource(device_id=self.config.device_id, sample_rate=self.config.sample_rate,
                                     input_channel=self.config.input_channel)
@@ -398,7 +412,7 @@ class MainAudioEngine:
         return MicrophoneSource(device_id=None, sample_rate=self.config.sample_rate)
 
     def _try_alsa_fallback(self, failed_source: AudioSource) -> Optional[AudioSource]:
-        if self.config.audio_backend not in ("auto", "alsa") or self.config.source == "gnuradio":
+        if self.config.audio_backend not in ("auto", "alsa") or self.config.source in ("gnuradio", "hackrf"):
             return None
         device_name = getattr(failed_source, "device_name", "") or self.config.device_name or ""
         mapping = match_alsa_device(device_name, self.config.device_alsa_card_id,
@@ -421,7 +435,6 @@ class MainAudioEngine:
             if not self._monitor_requested:
                 self._monitor_generation += 1
             self._monitor_requested = True
-            self.recorder.resume()
             return self._start_locked()
 
     def _start_locked(self, *, from_reconnect: bool = False,
@@ -441,7 +454,7 @@ class MainAudioEngine:
             self._resolve_capture_device()
             self.source = self._create_source()
             print(f"[AUDIO START] Requested source: {self.config.source}")
-            if self.config.audio_backend == "alsa":
+            if self.config.audio_backend == "alsa" and self.config.source != "hackrf":
                 original = self.source
                 self.source = self._try_alsa_fallback(original)
                 if self.source is None:
@@ -475,6 +488,7 @@ class MainAudioEngine:
             print(f"[MainAudioEngine] Start failed: {e}")
             return False
 
+        self.recorder.resume()
         self._is_running = True
         self.device_reconnecting = False
         self._reconnect_identity = None
@@ -660,6 +674,8 @@ class MainAudioEngine:
 
                 # Split paths: archive remains the captured signal; gain is detection-only.
                 raw_chunk, chunk = self._prepare_detection_chunk(chunk)
+                if self.config.source == "hackrf":
+                    self._broadcast({"event": "live_pcm", "pcm": raw_chunk.astype("<f4", copy=False).tobytes()})
 
                 # Preserve real processed samples for the realtime chart.
                 indices = np.linspace(0, len(chunk) - 1, 128).astype(int)
@@ -811,7 +827,7 @@ class MainAudioEngine:
         source = self.source
         last_frame_ms = None if self.last_audio_frame_at is None else round((now - self.last_audio_frame_at) * 1000)
         receiving = last_frame_ms is not None and last_frame_ms < 1000
-        if self.config.source != "gnuradio" and self.config.device_id is None:
+        if self.config.source not in ("gnuradio", "hackrf") and self.config.device_id is None:
             signal_state = "no_device"
         elif self._is_running and not receiving and self.started_at and now - self.started_at > 1.0:
             signal_state = "no_audio_data"
@@ -830,6 +846,9 @@ class MainAudioEngine:
         channel_levels = getattr(selector, "channel_rms_dbfs", [self.raw_level_dbfs, -100.0])
         return {
             "timestamp": now,
+            "applied_frequency_hz": (
+                source.frequency_hz if self._is_running and isinstance(source, HackRFSource) else None
+            ),
             "level_dbfs": self.current_level_dbfs,
             "raw_level_dbfs": self.raw_level_dbfs,
             "processed_level_dbfs": self.current_level_dbfs,
@@ -880,12 +899,12 @@ class MainAudioEngine:
             # source, real received frames are the only honest connectivity signal.
             "device_connected": bool(
                 self._is_running and source and source.is_active
-                and (self.config.source != "gnuradio" or receiving)
+                and (self.config.source not in ("gnuradio", "hackrf") or receiving)
             ),
             "device_reconnecting": self.device_reconnecting,
             "selected_device_available": bool(
                 self._is_running and (
-                    self.config.source == "gnuradio" or
+                    self.config.source in ("gnuradio", "hackrf") or
                     (self.resolved_device_id is not None and self.device_identity_match)
                 )
             ),

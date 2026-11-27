@@ -29,7 +29,7 @@ class WebSocketManager:
 ws_manager = WebSocketManager()
 
 
-async def websocket_monitor_endpoint(websocket: WebSocket, engine):
+async def websocket_monitor_endpoint(websocket: WebSocket, engine, *, audio=False):
     await ws_manager.connect(websocket)
 
     # A dedicated bounded asyncio queue avoids touching WebSocket/asyncio from
@@ -38,6 +38,8 @@ async def websocket_monitor_endpoint(websocket: WebSocket, engine):
     updates: asyncio.Queue[dict] = asyncio.Queue(maxsize=2)
 
     def sync_broadcast_bridge(telemetry_data: dict):
+        if (telemetry_data.get("event") == "live_pcm") != audio:
+            return
         def enqueue():
             if updates.full():
                 try:
@@ -51,13 +53,20 @@ async def websocket_monitor_endpoint(websocket: WebSocket, engine):
 
     try:
         # Send immediate initial telemetry
-        await websocket.send_json(engine.get_telemetry())
+        if not audio:
+            await websocket.send_json(engine.get_telemetry())
         while True:
             try:
                 update = await asyncio.wait_for(updates.get(), timeout=1.0)
             except asyncio.TimeoutError:
+                if audio:
+                    await websocket.send_bytes(b"")
+                    continue
                 update = engine.get_telemetry()
-            await websocket.send_json(update)
+            if audio:
+                await websocket.send_bytes(update["pcm"])
+            else:
+                await websocket.send_json(update)
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
