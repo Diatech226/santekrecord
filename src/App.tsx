@@ -11,6 +11,7 @@ import { api } from './services/api';
 import { getEngineDisplayState, reconcileSelectedDevice, selectDeviceForSource, settingsForSelectedDevice } from './services/deviceReconciliation';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AudioMeter } from './components/AudioMeter';
+import { HackRFControls } from './components/HackRFControls';
 import { SourceSelector } from './components/SourceSelector';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AudioPlayer } from './components/AudioPlayer';
@@ -244,9 +245,6 @@ export default function App() {
         api.getRecordings(),
       ]);
 
-      if (loadedSettings.source === 'gnuradio') {
-        loadedSettings.source = 'microphone';
-      }
       const reconciled = reconcileSelectedDevice(loadedDevices, loadedSettings);
       Object.assign(loadedSettings, reconciled);
       if (reconciled.selected_device_available) await api.saveSettings(loadedSettings);
@@ -286,6 +284,7 @@ export default function App() {
       }
       try {
         await api.stopMonitoring();
+        setRecordings(await api.getRecordings());
       } catch {
         // Safe fallback
       }
@@ -302,7 +301,7 @@ export default function App() {
     } else {
       // Start
       try {
-        if (settings.device_id === null) {
+        if ((settings.source === 'microphone' || settings.source === 'usb') && settings.device_id === null) {
           throw new Error('NO DEVICE: select an audio input before monitoring');
         }
         setStatus('opening');
@@ -418,7 +417,11 @@ export default function App() {
   };
 
   const handleSourceChange = (source: AudioSourceType) => {
-    const targetSource = source === 'gnuradio' ? 'microphone' : source;
+    if (source === 'gnuradio' || source === 'hackrf') {
+      void applyManualDeviceOverride({ source, device_id: null, device_name: undefined });
+      return;
+    }
+    const targetSource = source;
     const selectedDevice = selectDeviceForSource(devices, targetSource, settings.device_id);
     void applyManualDeviceOverride(settingsForSelectedDevice(targetSource, selectedDevice));
   };
@@ -636,7 +639,7 @@ export default function App() {
                 source={settings.source}
                 deviceId={settings.device_id}
                 devices={devices}
-                disabled={engineRunning}
+                disabled={engineRunning || captureOpening}
                 isRefreshing={isRefreshingDevices}
                 onRefreshDevices={handleRefreshDevices}
                 connectionStatus={status}
@@ -654,6 +657,22 @@ export default function App() {
                   });
                 }}
               />
+              {settings.source === 'hackrf' && (
+                <HackRFControls settings={settings} telemetry={telemetry}
+                  onTuned={(updated, update) => {
+                    setSettings(updated);
+                    setTelemetry(update);
+                    setEngineRunning(true);
+                    setMonitorRequested(true);
+                    monitoringRef.current = true;
+                    if (wsRef.current?.readyState !== WebSocket.OPEN) connectMonitorSocket();
+                  }}
+                  onUpdate={update => {
+                    setTelemetry(update);
+                    void api.getRecordings().then(setRecordings).catch(() => {});
+                  }}
+                />
+              )}
               {telemetry && (
                 <div className="mt-3">
                   <details className="text-[10px] border border-[#202226] rounded p-2 text-[#A0A0A0]">
@@ -722,6 +741,8 @@ export default function App() {
                 id="btn-toggle-monitoring"
                 type="button"
                 onClick={toggleMonitoring}
+                disabled={settings.source === 'hackrf' &&
+                  (!(monitorRequested || engineRunning) || Boolean(telemetry?.recording))}
                 style={
                   !(monitorRequested || engineRunning)
                     ? ({
@@ -813,6 +834,7 @@ export default function App() {
                 {(monitorRequested || engineRunning) && (
                   <button
                     id="btn-stop-monitoring-sticky"
+                    disabled={settings.source === 'hackrf' && Boolean(telemetry?.recording)}
                     type="button"
                     onClick={toggleMonitoring}
                     className="flex w-full shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded bg-[#D92D2D] px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-white transition-colors hover:bg-[#B91C1C] sm:w-auto"

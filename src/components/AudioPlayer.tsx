@@ -348,6 +348,12 @@ export const AudioPlayer: React.FC<Props> = ({
           </span>
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#151619] border border-[#2A2B2F] text-[#00F0FF] uppercase">
             {recording.source}
+            {recording.frequency_hz != null && ` · ${recording.frequency_hz / 1e6} MHz`}
+            {recording.modulation && ` · ${recording.modulation}`}
+            {recording.source === 'hackrf' && (
+              recording.trigger_mode === 'manual' ? ' · Manuel' :
+              recording.trigger_mode === 'voice_then_manual' ? ' · Voix puis manuel' : ' · Voix'
+            )}
           </span>
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#151619] border border-[#1F2228] text-[#808080]">
             {duration > 0 ? `${duration.toFixed(1)}s` : '--'}

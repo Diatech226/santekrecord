@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from ..config.settings import AppConfig, load_config, save_config
+from ..audio.hackrf import list_hackrf_devices
 from ..audio.microphone import MicrophoneSource
 from ..detection.rms import RMSDetector
 from ..recording.metadata import RecordingMetadata
@@ -402,32 +403,67 @@ def get_settings(engine=Depends(get_engine)):
 
 @router.put("/settings", response_model=AppConfig)
 def update_settings(new_settings: AppConfig, engine=Depends(get_engine)):
-    saved = save_config(new_settings)
-    engine.update_config(saved)
-    return saved
+    with engine.control_lock:
+        try:
+            engine.update_config(new_settings)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return save_config(engine.config)
 
 
 @router.post("/monitor/start")
 def start_monitoring(settings_override: Optional[AppConfig] = None, engine=Depends(get_engine)):
-    if settings_override is not None:
-        save_config(settings_override)
-        engine.update_config(settings_override)
-    ok = engine.start()
-    if not ok:
+    with engine.control_lock:
+        restarted = None
+        if settings_override is not None:
+            try:
+                restarted = engine.update_config(settings_override)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            save_config(engine.config)
+        ok = engine.start() if restarted is None else restarted
         telemetry = engine.get_telemetry()
-        return JSONResponse(status_code=503, content={
-            "success": False, "error": engine.current_error or "Failed to start audio engine",
-            "device_id": engine.config.device_id, "device_name": engine.config.device_name,
-            "hostapi": telemetry.get("hostapi"),
-            "native_samplerate": telemetry.get("capture_sample_rate"),
-        })
-    return {"success": True, "message": "Monitoring active", **engine.get_telemetry()}
+        if not ok:
+            return JSONResponse(status_code=503, content={
+                "success": False, "error": engine.current_error or "Failed to start audio engine",
+                "device_id": engine.config.device_id, "device_name": engine.config.device_name,
+                "hostapi": telemetry.get("hostapi"),
+                "native_samplerate": telemetry.get("capture_sample_rate"),
+            })
+        return {"success": True, "message": "Monitoring active", **telemetry}
 
 
 @router.post("/monitor/stop")
 def stop_monitoring(engine=Depends(get_engine)):
-    engine.stop()
+    with engine.control_lock:
+        engine.stop()
     return {"success": True, "message": "Monitoring stopped"}
+
+
+@router.get("/audio/hackrf/devices")
+def get_hackrf_devices():
+    return list_hackrf_devices()
+
+
+@router.post("/recording/start")
+def start_recording(engine=Depends(get_engine)):
+    with engine.control_lock, engine._capture_lock:
+        if not engine._is_running or engine.config.source != "hackrf":
+            raise HTTPException(status_code=409, detail="Appliquez une fréquence HackRF avant d’enregistrer.")
+        try:
+            engine.recorder.start_manual()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return engine.get_telemetry()
+
+
+@router.post("/recording/stop")
+def stop_recording(engine=Depends(get_engine)):
+    with engine.control_lock:
+        if engine.config.source != "hackrf":
+            raise HTTPException(status_code=409, detail="La source active doit être le HackRF.")
+        engine.recorder.stop_recording()
+    return engine.get_telemetry()
 
 
 @router.delete("/audio/ambient-profile")

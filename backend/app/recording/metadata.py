@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class RecordingMetadata(BaseModel):
     recording_id: str = Field(..., description="Timestamp-based ID format: YYYY-MM-DD_HH-MM-SS")
-    source: str = Field(..., description="Audio input source (microphone, usb, gnuradio)")
+    source: str = Field(..., description="Audio input source (microphone, usb, gnuradio, hackrf)")
     device: str = Field(..., description="Hardware device or pipe label")
     sample_rate: int = Field(default=16000, description="Audio sample rate (16000 Hz)")
     channels: int = Field(default=1, description="Number of audio channels (1 = mono)")
@@ -14,7 +14,7 @@ class RecordingMetadata(BaseModel):
     timestamp_end: str = Field(..., description="ISO 8601 recording end time")
     duration_seconds: float = Field(default=0.0, description="Total recording duration in seconds")
     # Export metadata names are retained for existing recording readers. They
-    # are snapshots, not live controls: recording is authorized by confirmed voice.
+    # describe how the recording started and whether it was taken over manually.
     trigger_mode: str = Field(default="confirmed_voice", description="Recording authorization recorded in this file")
     trigger_threshold_dbfs: Optional[float] = Field(default=None, description="Diagnostic event threshold snapshot")
     vad_threshold: float = Field(default=0.50, description="VAD start threshold snapshot")

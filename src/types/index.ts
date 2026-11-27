@@ -1,4 +1,4 @@
-export type AudioSourceType = 'microphone' | 'usb' | 'gnuradio';
+export type AudioSourceType = 'microphone' | 'usb' | 'gnuradio' | 'hackrf';
 
 
 export type EngineStatus =
@@ -129,6 +129,7 @@ export interface AppSettings {
   transmission_hangover_seconds?: number;
   keep_internal_pause_ms?: number;
   // HackRF / GNU Radio specific
+  hackrf_serial?: string;
   frequency_hz?: number;
   modulation?: string;
   station_id?: string;
@@ -215,6 +216,8 @@ export interface MonitorUpdate {
   waveform?: number[];
   spectrum?: number[];
   active_source?: string;
+  applied_frequency_hz?: number | null;
+  manual_recording?: boolean;
   error_message?: string | null;
   callback_count?: number;
   capture_channels?: number;

@@ -103,11 +103,19 @@ export const SourceSelector: React.FC<Props> = ({
             <Usb className="w-3.5 h-3.5" />
             <span className="truncate">{t.usbSound}</span>
           </button>
+          <button type="button" disabled={disabled} aria-pressed={source === 'gnuradio'}
+            onClick={() => onSourceChange('gnuradio')} className="border rounded p-2 text-xs">
+            GNU Radio (FIFO)
+          </button>
+          <button type="button" disabled={disabled} aria-pressed={source === 'hackrf'}
+            onClick={() => onSourceChange('hackrf')} className="border rounded p-2 text-xs">
+            HackRF USB
+          </button>
         </div>
       </div>
 
       {/* Device dropdown */}
-      <div className="space-y-1.5">
+      {(source === 'microphone' || source === 'usb') && <div className="space-y-1.5">
         {(connectionStatus === 'device_disconnected' || connectionStatus === 'reconnecting') && (
           <div role="status" className="text-[10px] font-bold text-amber-400">
             {connectionStatus === 'reconnecting' ? '⚠ DEVICE DISCONNECTED · RECONNECTING…' : '⚠ DEVICE DISCONNECTED'}
@@ -176,7 +184,7 @@ export const SourceSelector: React.FC<Props> = ({
             </button>
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 };

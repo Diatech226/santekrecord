@@ -5,7 +5,22 @@ const backendOrigin = typeof window === 'undefined'
   : `${window.location.protocol}//${window.location.hostname}:8000`;
 const API_BASE = `${backendOrigin}/api`;
 
+export const liveAudioUrl = backendOrigin.replace(/^http/, 'ws') + '/ws/audio';
+
 export const api = {
+  async getHackRFDevices(): Promise<{ serial: string; label: string }[]> {
+    const res = await fetch(`${API_BASE}/audio/hackrf/devices`);
+    if (!res.ok) throw new Error(`HackRF USB · HTTP ${res.status}`);
+    return await res.json();
+  },
+
+  async setManualRecording(start: boolean): Promise<MonitorUpdate> {
+    const res = await fetch(`${API_BASE}/recording/${start ? 'start' : 'stop'}`, { method: 'POST' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
+    return body;
+  },
+
   async getHealth(): Promise<{ status: string; engine: string; timestamp: string }> {
     try {
       const res = await fetch(`${API_BASE}/health`);
@@ -113,7 +128,7 @@ export const api = {
     return await res.json();
   },
 
-  async startMonitoring(settings?: AppSettings): Promise<{ success: boolean; message: string }> {
+  async startMonitoring(settings?: AppSettings): Promise<MonitorUpdate & { success: boolean; message: string }> {
     try {
       const res = await fetch(`${API_BASE}/monitor/start`, {
         method: 'POST',
