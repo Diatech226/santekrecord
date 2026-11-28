@@ -10,7 +10,6 @@ Application web locale minimaliste et professionnelle pour **Linux** permettant 
   1. **Microphone** (détection automatique via `sounddevice` / ALSA / PulseAudio / Web Audio)
   2. **Carte son USB / Line-In** (sélection de l'interface d'entrée matérielle)
   3. **HackRF USB** (réception NFM à fréquence fixe et écoute dans le navigateur)
-  4. **GNU Radio (FIFO)** (flux `float32` mono 16 kHz depuis `/tmp/hackrf_audio.f32`)
 - **Moteur de Détection Intelligent** :
   - **RMS / dBFS** : calcul en temps réel du niveau sonore (`20 * log10(RMS)`).
   - **Silero VAD local** : probabilité de présence de voix humaine (0.00 à 1.00) avec modèle ONNX et fallback acoustique.
@@ -349,9 +348,9 @@ Pour surveiller un signal RF (ex: VHF/UHF NFM) avec un HackRF :
    - `Rational Resampler` -> Sortie 16000 Hz
    - `File Sink` : Chemin `/tmp/hackrf_audio.f32`, format `Float 32` (Unbuffered).
 
-3. Dans l'application web :
-   - Choisissez **GNU Radio (FIFO)** comme source
-   - Le système lira automatiquement le flux RF démodulé et déclenchera l'enregistrement dès qu'une voix est captée sur la fréquence.
+3. Via l’API, récupérez la configuration avec `GET /api/settings`, définissez
+   `source` sur `gnuradio` et envoyez la configuration complète à `POST /api/monitor/start`.
+   Le serveur lira le flux démodulé et lancera l’enregistrement dès qu’une voix est confirmée.
 
 ---
 
