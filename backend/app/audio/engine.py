@@ -4,12 +4,14 @@ import time
 from typing import Optional, Set, Callable, Dict, Any, List
 import numpy as np
 import collections
+from contextlib import nullcontext
 
 from .base import AudioSource
 from .microphone import MicrophoneSource
 from .soundcard import SoundCardSource
 from .gnuradio import GNURadioSource
 from .hackrf import HackRFSource
+from .scan import HackRFScan, ScanAction, ScanPlan
 from .alsa import ALSAArecordSource, match_alsa_device
 from .device_resolver import AudioDeviceIdentity, resolve_configured_device
 from ..detection.rms import RMSDetector
@@ -68,6 +70,10 @@ class MainAudioEngine:
         self._reconnect_device_id: Optional[int] = None
         self._monitor_generation = 0
         self.control_lock = threading.RLock()
+        self._radio_lock = threading.RLock()
+        self.scan: Optional[HackRFScan] = None
+        self.auto_record_hackrf = True
+        self._radio_settle_samples = 0
         self._capture_lock = threading.RLock()
 
         # Metrics for monitoring
@@ -344,10 +350,13 @@ class MainAudioEngine:
                   "detection_profile", "sample_rate")
         return any(getattr(old_config, field) != getattr(new_config, field) for field in fields)
 
-    def update_config(self, new_config: AppConfig) -> Optional[bool]:
+    def update_config(self, new_config: AppConfig, *, tune=False) -> Optional[bool]:
         capture_was_requested = self._is_running or self._monitor_requested
-        restart_capture = (capture_was_requested and
-                           self.requires_capture_restart(self.config, new_config))
+        requested_retune = (tune and isinstance(self.source, HackRFSource)
+                            and new_config.source == "hackrf"
+                            and (self.scan is not None or self.source.frequency_hz != new_config.frequency_hz))
+        restart_capture = capture_was_requested and (
+            requested_retune or self.requires_capture_restart(self.config, new_config))
         reconfigure_detection = self.requires_detection_reconfigure(self.config, new_config)
         if restart_capture:
             if "hackrf" in (self.config.source, new_config.source):
@@ -488,6 +497,8 @@ class MainAudioEngine:
             print(f"[MainAudioEngine] Start failed: {e}")
             return False
 
+        if isinstance(self.source, HackRFSource):
+            self.recorder.set_radio_channel(self.source.frequency_hz)
         self.recorder.resume()
         self._is_running = True
         self.device_reconnecting = False
@@ -520,7 +531,9 @@ class MainAudioEngine:
         return True
 
     def stop(self) -> None:
-        with self._capture_lock:
+        with self._radio_lock, self._capture_lock:
+            self.scan = None
+            self._radio_settle_samples = 0
             self._monitor_requested = False
             self._monitor_generation += 1
             self._is_running = False
@@ -562,6 +575,10 @@ class MainAudioEngine:
         """Finalize capture and immediately publish the real stopped state."""
         with self._capture_lock:
             self.current_error = reason
+            if self.scan is not None:
+                self.scan = None
+                self._monitor_requested = False
+            self._radio_settle_samples = 0
             self.current_status = "device_disconnected"
             self._is_running = False
             self._reconnect_identity = self._configured_identity()
@@ -650,177 +667,310 @@ class MainAudioEngine:
             self.current_status = "learning_ambient" if self.ambient_learning else "listening"
         return deleted
 
+    def start_scan(self, plan: ScanPlan, serial: str):
+        with self._radio_lock:
+            if self.recorder.is_recording:
+                raise ValueError("Arrêtez l’enregistrement avant de démarrer le scan.")
+            if self._monitor_requested and (
+                    not self._is_running or not isinstance(self.source, HackRFSource)
+                    or self.source.serial != serial):
+                raise ValueError("Arrêtez la réception en cours avant de sélectionner ce HackRF.")
+            self.scan = HackRFScan(plan)
+            if not self._is_running:
+                self.update_config(self.config.model_copy(update={
+                    "source": "hackrf", "hackrf_serial": serial, "frequency_hz": plan.start_hz,
+                    "modulation": "NFM", "sample_rate": 16000, "device_id": None,
+                    "device_name": f"HackRF One · {serial}",
+                }))
+                if not self.start():
+                    self.scan = None
+                    raise OSError(self.current_error)
+
+    def control_scan(self, action: ScanAction):
+        with self._radio_lock:
+            if self.scan is None:
+                if action == "stop":
+                    return
+                raise ValueError("Aucun scan actif.")
+            if action == "stop":
+                self.scan = None
+            elif action == "pause":
+                self.scan.paused = True
+                self.scan.pending_hz = None
+            elif self.recorder.manual_recording:
+                raise ValueError("Arrêtez l’enregistrement manuel avant de changer de canal.")
+            elif action == "resume":
+                self.scan.paused = False
+                self.scan.quiet_samples = 0
+            else:
+                self.recorder.stop_recording("scan_next")
+                self.scan.next_channel(self.source.frequency_hz)
+
+    def set_hackrf_auto_record(self, enabled: bool):
+        with self._radio_lock:
+            self.auto_record_hackrf = enabled
+            if self.config.source == "hackrf" and not enabled and not self.recorder.manual_recording:
+                self.recorder.stop_recording("auto_disabled")
+
+    def set_hackrf_manual_record(self, enabled: bool):
+        with self._radio_lock:
+            if self.config.source != "hackrf" or (enabled and not self._is_running):
+                raise ValueError("Appliquez une fréquence HackRF avant d’enregistrer.")
+            if enabled:
+                if self.scan is not None:
+                    # A queued hop has not happened. Record the currently applied channel.
+                    self.scan.pending_hz = None
+                self.recorder.start_manual()
+            else:
+                was_recording = self.recorder.is_recording
+                self.recorder.stop_recording()
+                if was_recording and self.scan is not None and not self.scan.paused:
+                    self.scan.next_channel(self.source.frequency_hz)
+
+    def _apply_scan_channel(self):
+        frequency = self.scan.pending_hz
+        if frequency != self.source.frequency_hz:
+            self.source.retune(frequency)
+        self.recorder.set_radio_channel(self.source.frequency_hz)
+        self.vad_detector.reset()
+        self.speech_detector.reset()
+        self.event_gate.reset()
+        self._reset_detection_state()
+        self.current_voice_detected = False
+        self.current_speech_prob = 0
+        self.noise_profile = self._new_noise_profile()
+        self._raw_ambient_levels.clear()
+        self._raw_ambient_quiet_bootstrap.clear()
+        self.raw_noise_floor_dbfs = None
+        self.raw_ambient_ready = False
+        self.ambient_learning = self.config.adaptive_noise
+        self.ambient_learned_samples = 0
+        self.ambient_profile_loaded = False
+        self.ambient_profile_age_seconds = None
+        self.ambient_profile_source = "learning"
+        self._ambient_profile_dirty = False
+        self._ambient_profile_saved = False
+        self._ambient_device_name = f"{self.source.device_name} {frequency} Hz"
+        self._radio_settle_samples = self.config.sample_rate * 192 // 1000
+        self.scan.tuned()
+
     def _audio_loop(self):
         last_broadcast_time = 0.0
 
         while self._is_running and self.source is not None:
+            radio = self.config.source == "hackrf"
+            source = self.source
+            lock = self._radio_lock if radio else nullcontext()
             try:
-                chunk = self.source.read_chunk(chunk_size=1024)
-                if chunk is None or len(chunk) == 0:
-                    now = time.time()
-                    if self.started_at and now - self.started_at >= 2.0 and self.last_audio_frame_at is None and self.current_error is None:
-                        self.current_error = "No audio callback received for 2 seconds"
-                        print("[AUDIO ERROR] No audio callback received for 2 seconds")
-                    elif self.last_audio_frame_at and now - self.last_audio_frame_at >= 2.0:
-                        print("[AUDIO ERROR] Device disconnected: no frames for 2 seconds")
-                        self._handle_device_disconnect(
-                            "Audio device disconnected or stopped delivering frames")
+                try:
+                    with lock:
+                        if not self._is_running:
+                            break
+                        if self.scan is not None and self.scan.pending_hz is not None:
+                            self._apply_scan_channel()
+                    chunk = source.read_chunk(chunk_size=1024)
+                except OSError as exc:
+                    if not radio:
+                        raise
+                    with lock:
+                        if self._is_running:
+                            self._handle_device_disconnect(f"HackRF USB : {exc}")
+                    break
+                with lock:
+                    if not self._is_running:
                         break
+                    if self.scan is not None and self.scan.pending_hz is not None:
+                        continue
+                    if chunk is None or len(chunk) == 0:
+                        now = time.time()
+                        if radio and now - (self.last_audio_frame_at or self.started_at or now) >= 2.0:
+                            self._handle_device_disconnect("HackRF USB déconnecté ou flux interrompu.")
+                            break
+                        if self.started_at and now - self.started_at >= 2.0 and self.last_audio_frame_at is None and self.current_error is None:
+                            self.current_error = "No audio callback received for 2 seconds"
+                            print("[AUDIO ERROR] No audio callback received for 2 seconds")
+                        elif self.last_audio_frame_at and now - self.last_audio_frame_at >= 2.0:
+                            print("[AUDIO ERROR] Device disconnected: no frames for 2 seconds")
+                            self._handle_device_disconnect(
+                                "Audio device disconnected or stopped delivering frames")
+                            break
+                        if now - last_broadcast_time >= 0.12:
+                            self._broadcast(self.get_telemetry())
+                            last_broadcast_time = now
+                        time.sleep(0.01)
+                        continue
+
+                    if radio and self._radio_settle_samples > 0:
+                        self._radio_settle_samples -= len(chunk)
+                        self.last_audio_frame_at = time.time()
+                        continue
+
+                    self._process_audio_chunk(chunk, radio)
+
+                    # 4. Rate-limited WebSocket broadcast (~8 Hz)
+                    now = time.time()
                     if now - last_broadcast_time >= 0.12:
                         self._broadcast(self.get_telemetry())
                         last_broadcast_time = now
-                    time.sleep(0.01)
-                    continue
-
-                # Split paths: archive remains the captured signal; gain is detection-only.
-                raw_chunk, chunk = self._prepare_detection_chunk(chunk)
-                if self.config.source == "hackrf":
-                    self._broadcast({"event": "live_pcm", "pcm": raw_chunk.astype("<f4", copy=False).tobytes()})
-
-                # Preserve real processed samples for the realtime chart.
-                indices = np.linspace(0, len(chunk) - 1, 128).astype(int)
-                self.current_waveform = np.round(chunk[indices], 5).tolist()
-                windowed = chunk * np.hanning(len(chunk))
-                magnitudes = np.abs(np.fft.rfft(windowed)) / max(1, len(chunk) / 2)
-                spectrum_db = 20 * np.log10(np.maximum(magnitudes, 1e-5))
-                spectrum_indices = np.linspace(0, len(spectrum_db) - 1, 64).astype(int)
-                self.current_spectrum = np.clip((spectrum_db[spectrum_indices] + 100) / 100, 0, 1).round(5).tolist()
-                detection_spectrum = self.noise_profile.spectrum(chunk)
-
-                # 1. Compute RMS & dBFS
-                rms, dbfs = self.rms_detector.process_chunk(chunk)
-                self.current_level_dbfs = round(dbfs, 1)
-                peak = float(np.max(np.abs(chunk))) if len(chunk) else 0.0
-                self.current_peak_dbfs = round(self.rms_detector.rms_to_dbfs(peak), 1)
-                self.frames_received += len(chunk)
-                self.last_audio_frame_at = time.time()
-                if self.frames_received <= len(chunk) or self.frames_received % self.config.sample_rate < len(chunk):
-                    print(f"[AUDIO ENGINE] frames_received={self.frames_received} processing_rate={self.config.sample_rate} level={self.current_level_dbfs:.1f}")
-                if self.current_error == "No audio callback received for 2 seconds":
-                    self.current_error = None
-                # 2. Compute Voice Activity Detection (Silero VAD)
-                speech_prob = self.vad_detector.get_speech_probability(chunk)
-                self.current_speech_prob = round(speech_prob, 2)
-                if dbfs > -50 and speech_prob < .10:
-                    self._vad_inactive_frames += 1
-                else:
-                    self._vad_inactive_frames = 0
-
-                noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
-                raw_ambient = self._raw_ambient_baseline()
-                if raw_ambient is None:
-                    self.event_gate.reset()
-                    event = AudioEventDecision(
-                        False, self.raw_level_dbfs, None, None, None, None, None,
-                    )
-                else:
-                    self.raw_noise_floor_dbfs = round(raw_ambient, 1)
-                    event = self.event_gate.process(self.raw_level_dbfs, raw_ambient)
-                self.current_event_active = event.event_active
-                decision = self.speech_detector.process(
-                    speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
-                    noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
-                    noise_metrics.spectral_difference,
-                )
-                effective_speech_confirmed = self._effective_confirmation(decision, speech_prob)
-                # Product invariant: a confirmed human voice is the complete
-                # recording authorization. The raw event gate is diagnostic.
-                human_voice_confirmed = bool(decision.speech_confirmed)
-                record_authorized = human_voice_confirmed
-                effective_speech_confirmed = record_authorized
-                self.effective_speech_confirmed = record_authorized
-                self._learn_raw_ambient(
-                    self.raw_level_dbfs, speech_prob, decision, event.event_active)
-                if (self._is_calibrating and self.raw_ambient_ready
-                        and self.is_verified_quiet(speech_prob, decision, event.event_active)):
-                    self._calibration_levels.append(self.raw_level_dbfs)
-                learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
-                if self.ambient_learning:
-                    # Calibration is measured in verified quiet audio, not wall time.
-                    # An empty profile needs quiet bootstrap frames; a restored or
-                    # partially learned profile can also reject radio signatures.
-                    if (self.raw_ambient_ready
-                            and self.should_learn_ambient(speech_prob, decision)):
-                        self.noise_profile.update(dbfs, detection_spectrum)
-                        self.ambient_learned_samples += len(chunk)
-                    # Chunk boundaries may straddle the configured duration; one
-                    # analysis frame of tolerance avoids requiring a whole extra
-                    # quiet frame while still never learning a voice frame.
-                    if self.ambient_learned_samples >= max(0, learning_samples - len(chunk)):
-                        self.ambient_learning = False
-                        self.current_status = "listening"
-                        self._ambient_profile_dirty = True
-                        self._save_ambient_profile_if_valid()
-                noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
-                # Never absorb probable voice or an active event into the room baseline.
-                if (self.config.adaptive_noise and not self.ambient_learning
-                        and decision.ambient_update_allowed(
-                            speech_prob, self.recorder.is_recording, .15)):
-                    self.noise_profile.update(dbfs, detection_spectrum)
-                    self._ambient_profile_dirty = True
-                    noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
-                self.noise_floor_dbfs = round(noise_metrics.noise_floor_dbfs, 1)
-                self.current_dynamic_threshold = round(noise_metrics.dynamic_threshold_dbfs, 1)
-                self.current_snr = round(noise_metrics.broadband_snr_db, 1)
-                self.current_speech_band_snr = round(noise_metrics.speech_band_snr_db, 1)
-                self.current_spectral_change = round(noise_metrics.spectral_difference, 3)
-                self.current_ambient_spectrum = self.noise_profile.display_spectrum()
-                self.current_radio_activity = decision.radio_activity
-                self.current_radio_activity_score = decision.radio_activity_score
-                self.current_speech_candidate = decision.is_candidate
-                self.current_speech_confirmed = decision.speech_confirmed
-                self.current_speech_reject_reason = (
-                    "ambient_learning_active" if self.ambient_learning else decision.reject_reason
-                )
-
-                # 3. Process recorder state machine
-                status, voice_detected, is_recording = self.recorder.process_frame(
-                    raw_chunk, self.current_level_dbfs, self.current_speech_prob,
-                    speech_confirmed=effective_speech_confirmed,
-                    candidate=decision.is_candidate, event_active=event.event_active,
-                    radio_activity=decision.radio_activity,
-                    confidence=decision.confidence,
-                    metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
-                             "raw_noise_floor_dbfs": raw_ambient,
-                             "raw_level_dbfs": self.raw_level_dbfs,
-                             "event_delta_db": event.delta_db,
-                             "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
-                             "snr_db": noise_metrics.broadband_snr_db,
-                             "speech_band_snr_db": noise_metrics.speech_band_snr_db,
-                             "spectral_change": noise_metrics.spectral_difference,
-                             "speech_probability": speech_prob,
-                             "speech_confirmed": decision.speech_confirmed,
-                             "effective_speech_confirmed": effective_speech_confirmed,
-                             "radio_activity": decision.radio_activity,
-                             "radio_activity_score": decision.radio_activity_score},
-                    vad_backend=self.vad_detector.vad_backend,
-                    return_to_ambient=(not event.event_active and
-                                       speech_prob < self.config.vad_stop_threshold),
-                )
-                self.ambient_learning_paused_for_voice = bool(
-                    self.ambient_learning and (
-                        effective_speech_confirmed or is_recording
-                        or decision.is_candidate
-                    )
-                )
-                self.current_status = (("calibration_paused_recording_voice"
-                    if self.ambient_learning_paused_for_voice else
-                    ("calibration_paused_voice_present"
-                    if speech_prob >= self.config.ambient_learning_vad_max else "learning_ambient"))
-                    if self.ambient_learning else status)
-                self.current_voice_detected = voice_detected
-
-                # 4. Rate-limited WebSocket broadcast (~8 Hz)
-                now = time.time()
-                if now - last_broadcast_time >= 0.12:
-                    self._broadcast(self.get_telemetry())
-                    last_broadcast_time = now
 
             except Exception as e:
                 print(f"[MainAudioEngine] Loop error: {e}")
                 self.current_error = str(e)
                 self.current_status = "error"
                 time.sleep(0.1)
+
+    def _process_audio_chunk(self, chunk, radio):
+        # Split paths: archive remains the captured signal; gain is detection-only.
+        raw_chunk, chunk = self._prepare_detection_chunk(chunk)
+
+        # Preserve real processed samples for the realtime chart.
+        indices = np.linspace(0, len(chunk) - 1, 128).astype(int)
+        self.current_waveform = np.round(chunk[indices], 5).tolist()
+        windowed = chunk * np.hanning(len(chunk))
+        magnitudes = np.abs(np.fft.rfft(windowed)) / max(1, len(chunk) / 2)
+        spectrum_db = 20 * np.log10(np.maximum(magnitudes, 1e-5))
+        spectrum_indices = np.linspace(0, len(spectrum_db) - 1, 64).astype(int)
+        self.current_spectrum = np.clip((spectrum_db[spectrum_indices] + 100) / 100, 0, 1).round(5).tolist()
+        detection_spectrum = self.noise_profile.spectrum(chunk)
+
+        # 1. Compute RMS & dBFS
+        rms, dbfs = self.rms_detector.process_chunk(chunk)
+        self.current_level_dbfs = round(dbfs, 1)
+        peak = float(np.max(np.abs(chunk))) if len(chunk) else 0.0
+        self.current_peak_dbfs = round(self.rms_detector.rms_to_dbfs(peak), 1)
+        self.frames_received += len(chunk)
+        self.last_audio_frame_at = time.time()
+        if self.frames_received <= len(chunk) or self.frames_received % self.config.sample_rate < len(chunk):
+            print(f"[AUDIO ENGINE] frames_received={self.frames_received} processing_rate={self.config.sample_rate} level={self.current_level_dbfs:.1f}")
+        if self.current_error == "No audio callback received for 2 seconds":
+            self.current_error = None
+        # 2. Compute Voice Activity Detection (Silero VAD)
+        speech_prob = self.vad_detector.get_speech_probability(chunk)
+        self.current_speech_prob = round(speech_prob, 2)
+        if dbfs > -50 and speech_prob < .10:
+            self._vad_inactive_frames += 1
+        else:
+            self._vad_inactive_frames = 0
+
+        noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+        raw_ambient = self._raw_ambient_baseline()
+        if raw_ambient is None:
+            self.event_gate.reset()
+            event = AudioEventDecision(
+                False, self.raw_level_dbfs, None, None, None, None, None,
+            )
+        else:
+            self.raw_noise_floor_dbfs = round(raw_ambient, 1)
+            event = self.event_gate.process(self.raw_level_dbfs, raw_ambient)
+        self.current_event_active = event.event_active
+        decision = self.speech_detector.process(
+            speech_prob, dbfs, noise_metrics.noise_floor_dbfs,
+            noise_metrics.broadband_snr_db, noise_metrics.speech_band_snr_db,
+            noise_metrics.spectral_difference,
+        )
+        effective_speech_confirmed = self._effective_confirmation(decision, speech_prob)
+        # Product invariant: a confirmed human voice is the complete
+        # recording authorization. The raw event gate is diagnostic.
+        human_voice_confirmed = bool(decision.speech_confirmed)
+        record_authorized = human_voice_confirmed
+        effective_speech_confirmed = record_authorized
+        self.effective_speech_confirmed = record_authorized
+        self._learn_raw_ambient(
+            self.raw_level_dbfs, speech_prob, decision, event.event_active)
+        if (self._is_calibrating and self.raw_ambient_ready
+                and self.is_verified_quiet(speech_prob, decision, event.event_active)):
+            self._calibration_levels.append(self.raw_level_dbfs)
+        learning_samples = int(self.config.ambient_learning_seconds * self.config.sample_rate)
+        if self.ambient_learning:
+            # Calibration is measured in verified quiet audio, not wall time.
+            # An empty profile needs quiet bootstrap frames; a restored or
+            # partially learned profile can also reject radio signatures.
+            if (self.raw_ambient_ready
+                    and self.should_learn_ambient(speech_prob, decision)):
+                self.noise_profile.update(dbfs, detection_spectrum)
+                self.ambient_learned_samples += len(chunk)
+            # Chunk boundaries may straddle the configured duration; one
+            # analysis frame of tolerance avoids requiring a whole extra
+            # quiet frame while still never learning a voice frame.
+            if self.ambient_learned_samples >= max(0, learning_samples - len(chunk)):
+                self.ambient_learning = False
+                self.current_status = "listening"
+                self._ambient_profile_dirty = True
+                self._save_ambient_profile_if_valid()
+        noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+        # Never absorb probable voice or an active event into the room baseline.
+        if (self.config.adaptive_noise and not self.ambient_learning
+                and decision.ambient_update_allowed(
+                    speech_prob, self.recorder.is_recording, .15)):
+            self.noise_profile.update(dbfs, detection_spectrum)
+            self._ambient_profile_dirty = True
+            noise_metrics = self.noise_profile.analyse(dbfs, detection_spectrum)
+        self.noise_floor_dbfs = round(noise_metrics.noise_floor_dbfs, 1)
+        self.current_dynamic_threshold = round(noise_metrics.dynamic_threshold_dbfs, 1)
+        self.current_snr = round(noise_metrics.broadband_snr_db, 1)
+        self.current_speech_band_snr = round(noise_metrics.speech_band_snr_db, 1)
+        self.current_spectral_change = round(noise_metrics.spectral_difference, 3)
+        self.current_ambient_spectrum = self.noise_profile.display_spectrum()
+        self.current_radio_activity = decision.radio_activity
+        self.current_radio_activity_score = decision.radio_activity_score
+        self.current_speech_candidate = decision.is_candidate
+        self.current_speech_confirmed = decision.speech_confirmed
+        self.current_speech_reject_reason = (
+            "ambient_learning_active" if self.ambient_learning else decision.reject_reason
+        )
+
+        scan = self.scan
+        hop = False
+        if scan is not None:
+            rf_level = self.source.signal_dbfs
+            voice_on_channel = effective_speech_confirmed and (
+                scan.heard_signal or rf_level >= scan.plan.signal_dbfs)
+            hop = scan.observe(rf_level, voice_on_channel, len(chunk), self.config.sample_rate)
+
+        if radio and (scan is None or scan.heard_signal or scan.paused or self.recorder.manual_recording):
+            self._broadcast({"event": "live_pcm", "pcm": raw_chunk.astype("<f4", copy=False).tobytes()})
+
+        # 3. Process recorder state machine
+        status, voice_detected, is_recording = self.recorder.process_frame(
+            raw_chunk, self.current_level_dbfs, self.current_speech_prob,
+            speech_confirmed=effective_speech_confirmed,
+            candidate=decision.is_candidate, event_active=event.event_active,
+            radio_activity=decision.radio_activity,
+            confidence=decision.confidence,
+            metrics={"noise_floor_dbfs": noise_metrics.noise_floor_dbfs,
+                     "raw_noise_floor_dbfs": raw_ambient,
+                     "raw_level_dbfs": self.raw_level_dbfs,
+                     "event_delta_db": event.delta_db,
+                     "dynamic_threshold_dbfs": noise_metrics.dynamic_threshold_dbfs,
+                     "snr_db": noise_metrics.broadband_snr_db,
+                     "speech_band_snr_db": noise_metrics.speech_band_snr_db,
+                     "spectral_change": noise_metrics.spectral_difference,
+                     "speech_probability": speech_prob,
+                     "speech_confirmed": decision.speech_confirmed,
+                     "effective_speech_confirmed": effective_speech_confirmed,
+                     "radio_activity": decision.radio_activity,
+                     "radio_activity_score": decision.radio_activity_score},
+            vad_backend=self.vad_detector.vad_backend,
+            allow_auto=(not radio or (self.auto_record_hackrf and
+                        (scan is None or scan.heard_signal))),
+            return_to_ambient=(not event.event_active and
+                               speech_prob < self.config.vad_stop_threshold),
+        )
+        self.ambient_learning_paused_for_voice = bool(
+            self.ambient_learning and (
+                effective_speech_confirmed or is_recording
+                or decision.is_candidate
+            )
+        )
+        self.current_status = (("calibration_paused_recording_voice"
+            if self.ambient_learning_paused_for_voice else
+            ("calibration_paused_voice_present"
+            if speech_prob >= self.config.ambient_learning_vad_max else "learning_ambient"))
+            if self.ambient_learning else status)
+        self.current_voice_detected = effective_speech_confirmed if radio else voice_detected
+        if hop and not scan.paused and not self.recorder.manual_recording:
+            self.recorder.stop_recording("scan_end")
+            scan.next_channel(self.source.frequency_hz)
 
     def get_telemetry(self) -> Dict[str, Any]:
         now = time.time()
@@ -844,8 +994,15 @@ class MainAudioEngine:
         selector = getattr(source, "channel_selector", None)
         selected_index = getattr(selector, "selected_index", 0)
         channel_levels = getattr(selector, "channel_rms_dbfs", [self.raw_level_dbfs, -100.0])
+        scan = self.scan
         return {
             "timestamp": now,
+            "hackrf_auto_record": self.auto_record_hackrf,
+            "hackrf_scan": None if scan is None else {
+                **scan.plan.model_dump(),
+                "paused": scan.paused,
+                "signal": scan.heard_signal,
+            },
             "applied_frequency_hz": (
                 source.frequency_hz if self._is_running and isinstance(source, HackRFSource) else None
             ),

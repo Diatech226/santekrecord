@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, liveAudioUrl } from '../services/api';
-import { AppSettings, MonitorUpdate } from '../types';
+import { AppSettings, HackRFScanAction, MonitorUpdate } from '../types';
 
 interface Props {
   settings: AppSettings;
@@ -13,12 +13,31 @@ export function HackRFControls({ settings, telemetry, onTuned, onUpdate }: Props
   const [devices, setDevices] = useState<{ serial: string; label: string }[]>([]);
   const [serial, setSerial] = useState(settings.hackrf_serial ?? '');
   const [mhz, setMhz] = useState(String((settings.frequency_hz ?? 145000000) / 1e6));
+  const [startMhz, setStartMhz] = useState(mhz);
+  const [endMhz, setEndMhz] = useState(String(Math.min(6000, Number(mhz) + 0.1)));
+  const [stepKhz, setStepKhz] = useState('12.5');
+  const [hangMs, setHangMs] = useState('900');
+  const [signalDbfs, setSignalDbfs] = useState('-48');
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState('');
   const playback = useRef<{ context: AudioContext; socket: WebSocket } | null>(null);
   const applied = telemetry?.applied_frequency_hz;
   const recording = Boolean(telemetry?.recording && applied);
+  const receiving = Boolean(applied);
+  const scan = telemetry?.hackrf_scan;
+  const autoRecord = telemetry?.hackrf_auto_record ?? true;
+  const scanStart = scan?.start_hz;
+  const scanEnd = scan?.end_hz;
+  const scanStep = scan?.step_hz;
+  const scanHang = scan?.hang_ms;
+  const scanThreshold = scan?.signal_dbfs;
+  let receiveStatus = '';
+  if (telemetry?.manual_recording) receiveStatus = 'Enregistrement manuel';
+  else if (scan?.paused) receiveStatus = 'En pause';
+  else if (telemetry?.voice_detected && (!scan || scan.signal)) receiveStatus = 'Voix détectée';
+  else if (scan?.signal) receiveStatus = 'Signal détecté';
+  else if (scan) receiveStatus = 'Scan en cours';
 
   async function refresh() {
     try {
@@ -45,9 +64,22 @@ export function HackRFControls({ settings, telemetry, onTuned, onUpdate }: Props
   }, []);
 
   useEffect(() => {
-    stopListening();
-    setListening(false);
-  }, [applied]);
+    if (!receiving) {
+      stopListening();
+      setListening(false);
+    }
+  }, [receiving]);
+
+  useEffect(() => {
+    if (scanStart !== undefined && scanEnd !== undefined && scanStep !== undefined &&
+        scanHang !== undefined && scanThreshold !== undefined) {
+      setStartMhz(String(scanStart / 1e6));
+      setEndMhz(String(scanEnd / 1e6));
+      setStepKhz(String(scanStep / 1e3));
+      setHangMs(String(scanHang));
+      setSignalDbfs(String(scanThreshold));
+    }
+  }, [scanStart, scanEnd, scanStep, scanHang, scanThreshold]);
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -59,6 +91,10 @@ export function HackRFControls({ settings, telemetry, onTuned, onUpdate }: Props
     } finally {
       setBusy(false);
     }
+  }
+
+  function controlScan(action: HackRFScanAction) {
+    void run(async () => onUpdate(await api.controlHackRFScan(action)));
   }
 
   function toggleListening() {
@@ -108,12 +144,12 @@ export function HackRFControls({ settings, telemetry, onTuned, onUpdate }: Props
       <label className="block">
         HackRF USB
         <select className="ml-2 bg-[#151619] border rounded p-1" value={serial}
-          disabled={busy || recording} onChange={event => setSerial(event.target.value)}>
+          disabled={busy || recording || Boolean(scan)} onChange={event => setSerial(event.target.value)}>
           {!devices.length && <option value="">Aucun appareil</option>}
           {devices.map(device => <option key={device.serial} value={device.serial}>{device.label}</option>)}
         </select>
       </label>
-      <button type="button" disabled={busy || recording} onClick={() => void refresh()}>Rafraîchir les HackRF</button>
+      <button type="button" disabled={busy || recording || Boolean(scan)} onClick={() => void refresh()}>Rafraîchir les HackRF</button>
       <form className="flex flex-wrap gap-2" onSubmit={event => {
         event.preventDefault();
         void run(async () => {
@@ -132,12 +168,63 @@ export function HackRFControls({ settings, telemetry, onTuned, onUpdate }: Props
         <label>
           Fréquence (MHz)
           <input className="ml-2 w-28 bg-[#151619] border rounded p-1" type="number" required
-            min="1" max="6000" step="0.000001" disabled={busy || recording} value={mhz}
+            min="1" max="6000" step="0.000001" disabled={busy || recording || Boolean(scan)} value={mhz}
             onChange={event => setMhz(event.target.value)} />
         </label>
-        <button className="border rounded px-2" disabled={busy || recording} type="submit">Appliquer · NFM</button>
+        <button className="border rounded px-2" disabled={busy || recording || Boolean(scan)} type="submit">Appliquer · NFM</button>
       </form>
-      <p role="status">{applied ? `Réception · ${applied / 1e6} MHz · NFM` : 'Aucune fréquence appliquée'}</p>
+      <form className="space-y-2 border-y border-[#2A2B2F] py-3" onSubmit={event => {
+        event.preventDefault();
+        void run(async () => {
+          const start_hz = Math.round(Number(startMhz) * 1e6);
+          const end_hz = Math.round(Number(endMhz) * 1e6);
+          const step_hz = Math.round(Number(stepKhz) * 1e3);
+          if (!serial || end_hz - start_hz < step_hz) {
+            throw new Error('Sélectionnez un HackRF et une plage contenant au moins deux canaux.');
+          }
+          const update = await api.startHackRFScan({
+            start_hz, end_hz, step_hz, hang_ms: Number(hangMs), signal_dbfs: Number(signalDbfs),
+          }, serial);
+          onTuned(await api.getSettings(), update);
+        });
+      }}>
+        <fieldset className="grid grid-cols-2 gap-2" disabled={busy || Boolean(scan)}>
+          <legend className="mb-2 font-semibold">Balayage NFM</legend>
+          {([
+            ['Début (MHz)', startMhz, setStartMhz, 1, 6000, 0.000001],
+            ['Fin (MHz)', endMhz, setEndMhz, 1, 6000, 0.000001],
+            ['Pas (kHz)', stepKhz, setStepKhz, 1, 5999000, 0.001],
+            ['Temporisation (ms)', hangMs, setHangMs, 100, 10000, 1],
+            ['Seuil RF (dBFS)', signalDbfs, setSignalDbfs, -100, 0, 0.1],
+          ] as const).map(([label, value, setValue, min, max, step]) => (
+            <label key={label} className="min-w-0">
+              {label}
+              <input className="mt-1 w-full bg-[#151619] border rounded p-1"
+                type="number" required min={min} max={max} step={step} value={value}
+                onChange={event => setValue(event.target.value)} />
+            </label>
+          ))}
+        </fieldset>
+        <div className="flex flex-wrap gap-3">
+          <button type="submit" disabled={busy || recording || Boolean(scan)}>Démarrer</button>
+          <button type="button" disabled={!scan || busy || Boolean(telemetry?.manual_recording && scan.paused)}
+            onClick={() => controlScan(scan?.paused ? 'resume' : 'pause')}>
+            {scan?.paused ? 'Reprendre' : 'Pause'}
+          </button>
+          <button type="button" disabled={!scan || busy || telemetry?.manual_recording}
+            onClick={() => controlScan('next')}>Canal suivant</button>
+          <button type="button" disabled={!scan || busy} onClick={() => controlScan('stop')}>Arrêter le scan</button>
+        </div>
+      </form>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={autoRecord} disabled={busy}
+          onChange={event => {
+            const enabled = event.target.checked;
+            void run(async () => onUpdate(await api.setHackRFAutoRecording(enabled)));
+          }} />
+        Autoenregistrement vocal
+      </label>
+      <p role="status">{receiveStatus && `${receiveStatus} · `}{applied ? `Réception · ${applied / 1e6} MHz · NFM` : 'Aucune fréquence appliquée'}</p>
       <div className="flex flex-wrap gap-3">
         <button type="button" disabled={!applied} aria-pressed={listening} onClick={toggleListening}>
           {listening ? 'Muet' : 'Écouter en direct'}
@@ -145,7 +232,7 @@ export function HackRFControls({ settings, telemetry, onTuned, onUpdate }: Props
         <button type="button" disabled={!applied || busy || telemetry?.manual_recording}
           onClick={() => void run(async () => onUpdate(await api.setManualRecording(true)))}>Enregistrer</button>
         <button type="button" disabled={!recording || busy}
-          onClick={() => void run(async () => onUpdate(await api.setManualRecording(false)))}>Arrêter</button>
+          onClick={() => void run(async () => onUpdate(await api.setManualRecording(false)))}>Arrêter l’enregistrement</button>
       </div>
       {error && <p role="alert" className="text-red-400">{error}</p>}
     </div>

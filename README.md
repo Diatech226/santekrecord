@@ -312,6 +312,27 @@ Pour accéder à l'application depuis une autre machine du réseau, ouvrez les p
 
 La fréquence reste fixe pendant la capture. Le récepteur travaille en réception uniquement.
 
+### Balayage NFM
+
+1. Dans **HackRF USB**, choisissez le numéro de série. Saisissez **Début (MHz)**,
+   **Fin (MHz)** et **Pas (kHz)**, puis cliquez sur **Démarrer** dans **Balayage NFM**.
+   Le scan revient au premier canal après le dernier. Fermez puis rouvrez la page
+   pour vérifier que la fréquence et l’état du scan reflètent la réception du serveur.
+2. Lancez **Écouter en direct**. Sur un canal NFM actif, vérifiez que **Signal détecté**
+   apparaît même pendant une porteuse sans voix. Ajustez le **Seuil RF (dBFS)**
+   si le scan ignore une transmission faible ou se bloque sur du bruit. La
+   **Temporisation (ms)** fixe le délai après la perte d’activité. Essayez **Pause**,
+   **Reprendre** et **Canal suivant**, notamment sur une porteuse continue.
+3. Désactivez **Autoenregistrement vocal** et vérifiez qu’une transmission reste
+   audible sans créer de WAV. Réactivez-le, attendez une capture vocale, puis
+   cliquez sur **Enregistrer** pour la prolonger dans le même fichier. Activez **Muet**
+   et cliquez sur **Arrêter l’enregistrement**. Vérifiez la reprise du scan
+   et relisez le WAV pour contrôler la fréquence et le début de la voix.
+4. Débranchez le HackRF pendant une capture. Vérifiez que le scan s’arrête,
+   que l’erreur USB apparaît et que la partie reçue est dans l’historique.
+   Rebranchez-le en mode HackRF et relancez la réception. **Arrêter le scan**
+   laisse le récepteur accordé sur le dernier canal.
+
 ### Entrée GNU Radio externe par FIFO
 
 Pour surveiller un signal RF (ex: VHF/UHF NFM) avec un HackRF :

@@ -1,4 +1,4 @@
-import { AppSettings, AudioDevice, AudioDiagnostics, CalibrationState, MonitorUpdate, RecordingMeta, UsbTroubleshootResult } from '../types';
+import { AppSettings, AudioDevice, AudioDiagnostics, CalibrationState, HackRFScanAction, HackRFScanPlan, MonitorUpdate, RecordingMeta, UsbTroubleshootResult } from '../types';
 
 const backendOrigin = typeof window === 'undefined'
   ? 'http://127.0.0.1:8000'
@@ -7,7 +7,30 @@ const API_BASE = `${backendOrigin}/api`;
 
 export const liveAudioUrl = backendOrigin.replace(/^http/, 'ws') + '/ws/audio';
 
+async function hackrfCommand(path: string, method: 'POST' | 'PUT', payload: object): Promise<MonitorUpdate> {
+  const res = await fetch(`${API_BASE}/audio/hackrf/${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+  if (!res.ok) {
+    const detail = Array.isArray(body.detail) ? body.detail.map((item: { msg: string }) => item.msg).join(' ') : body.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
+  }
+  return body;
+}
+
 export const api = {
+  startHackRFScan: (plan: HackRFScanPlan, serial: string) =>
+    hackrfCommand('scan', 'POST', { ...plan, serial }),
+
+  controlHackRFScan: (action: HackRFScanAction) =>
+    hackrfCommand('scan/control', 'POST', { action }),
+
+  setHackRFAutoRecording: (enabled: boolean) =>
+    hackrfCommand('auto-recording', 'PUT', { enabled }),
+
   async getHackRFDevices(): Promise<{ serial: string; label: string }[]> {
     const res = await fetch(`${API_BASE}/audio/hackrf/devices`);
     if (!res.ok) throw new Error(`HackRF USB · HTTP ${res.status}`);

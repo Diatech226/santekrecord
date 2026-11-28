@@ -136,6 +136,16 @@ export interface AppSettings {
   fifo_path?: string;
 }
 
+export interface HackRFScanPlan {
+  start_hz: number;
+  end_hz: number;
+  step_hz: number;
+  hang_ms: number;
+  signal_dbfs: number;
+}
+
+export type HackRFScanAction = 'pause' | 'resume' | 'stop' | 'next';
+
 export interface MonitorUpdate {
   event?: string;
   timestamp?: number;
@@ -217,6 +227,8 @@ export interface MonitorUpdate {
   spectrum?: number[];
   active_source?: string;
   applied_frequency_hz?: number | null;
+  hackrf_auto_record?: boolean;
+  hackrf_scan?: (HackRFScanPlan & { paused: boolean; signal: boolean }) | null;
   manual_recording?: boolean;
   error_message?: string | null;
   callback_count?: number;
