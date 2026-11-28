@@ -38,6 +38,7 @@ class AudioRecorderEngine:
         self.event_buffer_samples = 0
         self.is_recording = False
         self.manual_recording = False
+        self._radio_frequency_hz = config.frequency_hz
         self._wait_for_voice_end = False
         self.current_status = "idle"
         self.metrics = []
@@ -125,14 +126,29 @@ class AudioRecorderEngine:
             self.manual_recording = True
             self.current_status = "communication_active"
 
-    def stop_recording(self):
+    def set_radio_channel(self, frequency_hz):
         with self._lock:
             if self.is_recording:
-                self._save_active_recording()
+                raise RuntimeError("Une capture est active pendant le changement de canal.")
+            self._radio_frequency_hz = frequency_hz
+            self.pre_buffer.clear()
+            self.pre_buffer_samples = 0
+            self.event_buffer_samples = 0
+            self._wait_for_voice_end = False
+
+    def stop_recording(self, reason="manual_stop"):
+        with self._lock:
+            if self.is_recording:
+                self._save_active_recording(reason)
                 self.pre_buffer.clear()
                 self.pre_buffer_samples = 0
                 self.current_status = "listening"
                 self._wait_for_voice_end = True
+
+    def _recording_frequency(self):
+        if self.config.source == "hackrf":
+            return self._radio_frequency_hz
+        return self.config.frequency_hz if self.config.source == "gnuradio" else None
 
     def _open_spool(self, recording_id, start_iso, trigger_mode="confirmed_voice"):
         self._trigger_mode = trigger_mode
@@ -149,7 +165,7 @@ class AudioRecorderEngine:
             json.dump({"recording_id": recording_id, "timestamp_start": start_iso,
                        "sample_rate": self.sample_rate, "source": self.config.source,
                        "device": self.config.device_name or "Audio Device",
-                       "frequency_hz": self.config.frequency_hz,
+                       "frequency_hz": self._recording_frequency(),
                        "modulation": self.config.modulation, "trigger_mode": trigger_mode}, handle)
             handle.flush()
             os.fsync(handle.fileno())
@@ -206,7 +222,7 @@ class AudioRecorderEngine:
 
     def process_frame(self, chunk, level_dbfs, speech_prob, *, speech_confirmed=None,
                       candidate=False, event_active=False, radio_activity=False, confidence=None, metrics=None,
-                      vad_backend="unknown", return_to_ambient=None):
+                      vad_backend="unknown", return_to_ambient=None, allow_auto=True):
         with self._lock:
             if not self._accepting_frames:
                 return self.current_status, False, self.is_recording
@@ -214,12 +230,12 @@ class AudioRecorderEngine:
                 chunk, level_dbfs, speech_prob, speech_confirmed=speech_confirmed,
                 candidate=candidate, event_active=event_active, radio_activity=radio_activity,
                 confidence=confidence, metrics=metrics, vad_backend=vad_backend,
-                return_to_ambient=return_to_ambient)
+                return_to_ambient=return_to_ambient, allow_auto=allow_auto)
 
     def _process_frame_locked(self, chunk, level_dbfs, speech_prob, *, speech_confirmed=None,
                               candidate=False, event_active=False, radio_activity=False,
                               confidence=None, metrics=None, vad_backend="unknown",
-                              return_to_ambient=None):
+                              return_to_ambient=None, allow_auto=True):
         chunk = np.asarray(chunk, dtype=np.float32)
         if speech_confirmed is None:
             speech_confirmed = False
@@ -232,7 +248,7 @@ class AudioRecorderEngine:
         self._push_prebuffer(chunk)
 
         if not self.is_recording:
-            if not speech_confirmed:
+            if not speech_confirmed or not allow_auto:
                 # The circular pre-roll is the temporary event buffer. It is
                 # promoted only by confirmed human voice and otherwise expires.
                 self.event_buffer_samples = self.event_buffer_samples + len(chunk) if event_active else 0
@@ -365,7 +381,7 @@ class AudioRecorderEngine:
             duration_seconds=round(len(result.samples)/self.sample_rate, 3), trigger_mode=getattr(self, "_trigger_mode", "confirmed_voice"),
             trigger_threshold_dbfs=avg("dynamic_threshold_dbfs"),
             vad_threshold=self.config.vad_start_threshold,
-            frequency_hz=self.config.frequency_hz if self.config.source in ("gnuradio", "hackrf") else None,
+            frequency_hz=self._recording_frequency(),
             modulation=self.config.modulation if self.config.source in ("gnuradio", "hackrf") else None,
             station_id=self.config.station_id if self.config.source in ("gnuradio", "hackrf") else None,
             profile=self.config.detection_profile, noise_floor_dbfs=avg("noise_floor_dbfs"),
@@ -388,11 +404,11 @@ class AudioRecorderEngine:
             self.on_recording_finished(meta, wav_path)
 
     # Kept as a private compatibility hook for older tests/integrations.
-    def _save_active_recording(self):
+    def _save_active_recording(self, reason="manual_stop"):
         pending = self.transmission_manager.flush()
         if pending and self.session_manager.session:
             self.session_manager.add(pending)
-        self._save_active_session("manual_stop")
+        self._save_active_session(reason)
 
     def _clear(self):
         if self._spool_file is not None:

@@ -9,10 +9,11 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config.settings import AppConfig, load_config, save_config
 from ..audio.hackrf import list_hackrf_devices
+from ..audio.scan import ScanAction, ScanPlan
 from ..audio.microphone import MicrophoneSource
 from ..detection.rms import RMSDetector
 from ..recording.metadata import RecordingMetadata
@@ -417,7 +418,7 @@ def start_monitoring(settings_override: Optional[AppConfig] = None, engine=Depen
         restarted = None
         if settings_override is not None:
             try:
-                restarted = engine.update_config(settings_override)
+                restarted = engine.update_config(settings_override, tune=True)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             save_config(engine.config)
@@ -445,25 +446,66 @@ def get_hackrf_devices():
     return list_hackrf_devices()
 
 
-@router.post("/recording/start")
-def start_recording(engine=Depends(get_engine)):
-    with engine.control_lock, engine._capture_lock:
-        if not engine._is_running or engine.config.source != "hackrf":
-            raise HTTPException(status_code=409, detail="Appliquez une fréquence HackRF avant d’enregistrer.")
+class ScanStart(ScanPlan):
+    serial: str = Field(pattern=r"^[0-9a-f]{8,32}$")
+
+
+class ScanControl(BaseModel):
+    action: ScanAction
+
+
+class HackRFAutoRecording(BaseModel):
+    enabled: bool
+
+
+@router.post("/audio/hackrf/scan")
+def start_hackrf_scan(request: ScanStart, engine=Depends(get_engine)):
+    with engine.control_lock:
+        plan = ScanPlan.model_validate(request.model_dump(exclude={"serial"}))
         try:
-            engine.recorder.start_manual()
+            engine.start_scan(plan, request.serial)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return engine.get_telemetry()
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        save_config(engine.config)
+        return engine.get_telemetry()
+
+
+@router.post("/audio/hackrf/scan/control")
+def control_hackrf_scan(request: ScanControl, engine=Depends(get_engine)):
+    with engine.control_lock:
+        try:
+            engine.control_scan(request.action)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return engine.get_telemetry()
+
+
+@router.put("/audio/hackrf/auto-recording")
+def set_hackrf_auto_recording(request: HackRFAutoRecording, engine=Depends(get_engine)):
+    with engine.control_lock:
+        engine.set_hackrf_auto_record(request.enabled)
+        return engine.get_telemetry()
+
+
+def _set_manual_recording(engine, enabled):
+    with engine.control_lock:
+        try:
+            engine.set_hackrf_manual_record(enabled)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return engine.get_telemetry()
+
+
+@router.post("/recording/start")
+def start_recording(engine=Depends(get_engine)):
+    return _set_manual_recording(engine, True)
 
 
 @router.post("/recording/stop")
 def stop_recording(engine=Depends(get_engine)):
-    with engine.control_lock:
-        if engine.config.source != "hackrf":
-            raise HTTPException(status_code=409, detail="La source active doit être le HackRF.")
-        engine.recorder.stop_recording()
-    return engine.get_telemetry()
+    return _set_manual_recording(engine, False)
 
 
 @router.delete("/audio/ambient-profile")

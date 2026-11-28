@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from .base import AudioSource
+from .hackrf_protocol import FRAME_BYTES, TUNE_MARKER
 
 
 def list_hackrf_devices():
@@ -37,6 +38,7 @@ class HackRFSource(AudioSource):
         self._process = None
         self._diagnostics = None
         self._pending = bytearray()
+        self.signal_dbfs = -120.0
 
     def start(self):
         if self.is_active:
@@ -50,13 +52,17 @@ class HackRFSource(AudioSource):
             self._process = subprocess.Popen(
                 ["/usr/bin/python3", "-u", str(Path(__file__).with_name("hackrf_receiver.py")),
                  self.serial, str(self.frequency_hz)],
-                stdout=subprocess.PIPE, stderr=self._diagnostics, bufsize=0,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._diagnostics, bufsize=0,
             )
             deadline = time.monotonic() + 8
-            while len(self._pending) < 4096:
+            count = 1024 * FRAME_BYTES
+            while len(self._pending) < count:
                 if self._process.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError(self._error())
-                self._read_bytes(4096 - len(self._pending), 0.1)
+                try:
+                    self._read_bytes(count - len(self._pending), 0.1)
+                except OSError as exc:
+                    raise RuntimeError(self._error()) from exc
             self._is_active = True
         except BaseException:
             self.stop()
@@ -75,12 +81,15 @@ class HackRFSource(AudioSource):
     def _read_bytes(self, count, timeout):
         stream = self._process.stdout
         if select.select([stream], [], [], timeout)[0]:
-            self._pending.extend(os.read(stream.fileno(), count))
+            data = os.read(stream.fileno(), count)
+            if not data:
+                raise OSError("Le flux USB HackRF est interrompu.")
+            self._pending.extend(data)
 
     def read_chunk(self, chunk_size=1024):
         if not self.is_active:
             return None
-        count = chunk_size * 4
+        count = chunk_size * FRAME_BYTES
         try:
             if len(self._pending) < count:
                 self._read_bytes(count - len(self._pending), 0.05)
@@ -91,23 +100,51 @@ class HackRFSource(AudioSource):
             return None
         if len(self._pending) < count:
             return None
-        chunk = np.frombuffer(bytes(self._pending[:count]), dtype="<f4")
+        frames = np.frombuffer(bytes(self._pending[:count]), dtype="<f4").reshape(-1, 2)
         del self._pending[:count]
-        return chunk
+        power = float(np.mean(frames[:, 1]))
+        if not np.isfinite(power):
+            raise OSError("Flux de puissance HackRF invalide.")
+        self.signal_dbfs = 10 * np.log10(max(power, 1e-12))
+        return frames[:, 0]
+
+    def retune(self, frequency_hz):
+        if not self.is_active:
+            raise OSError("La réception HackRF est arrêtée.")
+        self._process.stdin.write(f"{frequency_hz}\n".encode("ascii"))
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            # Drain the old pipe so that the GNU Radio sink can finish its
+            # last write even if the pipe filled while processing audio.
+            self._read_bytes(8192, 0.05)
+            marker = self._pending.find(TUNE_MARKER)
+            if marker >= 0:
+                del self._pending[:marker + len(TUNE_MARKER)]
+                while len(self._pending) < FRAME_BYTES:
+                    if time.monotonic() >= deadline:
+                        raise OSError("Le HackRF ne transmet plus après l’accord.")
+                    self._read_bytes(1024 * FRAME_BYTES, 0.05)
+                self.signal_dbfs = -120.0
+                self.frequency_hz = frequency_hz
+                return
+            # Keep only the suffix that could hold a split marker.
+            if len(self._pending) >= len(TUNE_MARKER):
+                del self._pending[:1 - len(TUNE_MARKER)]
+        raise OSError("Le HackRF n’a pas confirmé le nouvel accord.")
+
 
     def stop(self):
         self._is_active = False
         process, self._process = self._process, None
         if process is not None:
+            process.stdin.close()
+            process.stdout.close()
             if process.poll() is None:
-                process.terminate()
-                process.stdout.close()
                 try:
-                    process.wait(timeout=2)
+                    process.wait(timeout=0.5)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
-            process.stdout.close()
         if self._diagnostics is not None:
             self._diagnostics.close()
             self._diagnostics = None
