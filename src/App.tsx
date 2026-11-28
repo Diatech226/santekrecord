@@ -472,7 +472,7 @@ export default function App() {
               {t.uptime} <span className="text-[#A0A0A0]">{formatUptime(uptimeSeconds)}</span>
             </div>
             <div className="hidden md:block">
-              {t.device} <span className="text-[#A0A0A0] uppercase">{settings.source}</span>
+              {t.device} <span className="text-[#A0A0A0] uppercase">{settings.source === 'gnuradio' ? t.externalAudio : settings.source}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span

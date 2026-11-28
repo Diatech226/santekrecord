@@ -105,7 +105,7 @@ export const SourceSelector: React.FC<Props> = ({
           </button>
           <button type="button" disabled={disabled} aria-pressed={source === 'gnuradio'}
             onClick={() => onSourceChange('gnuradio')} className="border rounded p-2 text-xs">
-            GNU Radio (FIFO)
+            {t.externalAudio}
           </button>
           <button type="button" disabled={disabled} aria-pressed={source === 'hackrf'}
             onClick={() => onSourceChange('hackrf')} className="border rounded p-2 text-xs">
