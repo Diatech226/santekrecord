@@ -347,7 +347,7 @@ export const AudioPlayer: React.FC<Props> = ({
             {recording.filename_wav || `${recording.recording_id}.wav`}
           </span>
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#151619] border border-[#2A2B2F] text-[#00F0FF] uppercase">
-            {recording.source}
+            {recording.source === 'gnuradio' ? t.externalAudio : recording.source}
             {recording.frequency_hz != null && ` · ${recording.frequency_hz / 1e6} MHz`}
             {recording.modulation && ` · ${recording.modulation}`}
             {recording.source === 'hackrf' && (
