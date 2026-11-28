@@ -19,7 +19,7 @@ export interface Translations {
   inputSource: string;
   microphone: string;
   usbSound: string;
-  hackrfGnu: string;
+  externalAudio: string;
   deviceInterface: string;
   defaultAudioDevice: string;
   fifoStream: string;
@@ -334,7 +334,7 @@ export const translations: Record<Language, Translations> = {
     inputSource: 'Input Source',
     microphone: 'Microphone',
     usbSound: 'USB Sound',
-    hackrfGnu: 'HackRF / GNU',
+    externalAudio: 'External audio',
     deviceInterface: 'Device Interface',
     defaultAudioDevice: 'hw:0,0 [Default ALSA / PulseAudio]',
     fifoStream: 'FIFO Stream',
@@ -637,7 +637,7 @@ export const translations: Record<Language, Translations> = {
     inputSource: 'Source d\'Entrée',
     microphone: 'Microphone',
     usbSound: 'Son USB',
-    hackrfGnu: 'HackRF / GNU',
+    externalAudio: 'Entrée audio externe',
     deviceInterface: 'Interface Périphérique',
     defaultAudioDevice: 'hw:0,0 [ALSA / PulseAudio par Défaut]',
     fifoStream: 'Flux FIFO',
